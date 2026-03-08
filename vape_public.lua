@@ -35,11 +35,21 @@ local LP       = Players.LocalPlayer
 local Cam      = workspace.CurrentCamera
 local isMobile = UIS.TouchEnabled
 
--- CoreGui avec fallback sur PlayerGui si acces restreint (loadstring/GitHub)
+-- CoreGui : gethui() > CoreGui > PlayerGui
+-- gethui() est fourni par la plupart des executeurs pour eviter les restrictions
 local CoreGui
 do
-    local ok, result = pcall(function() return game:GetService("CoreGui") end)
-    CoreGui = (ok and result) or LP:WaitForChild("PlayerGui")
+    if type(gethui) == "function" then
+        local ok2, r2 = pcall(gethui)
+        if ok2 and r2 then CoreGui = r2 end
+    end
+    if not CoreGui then
+        local ok2, r2 = pcall(function() return game:GetService("CoreGui") end)
+        if ok2 and r2 then CoreGui = r2 end
+    end
+    if not CoreGui then
+        CoreGui = LP:WaitForChild("PlayerGui")
+    end
 end
 
 -- ==========================================
@@ -109,7 +119,19 @@ local iESP = {}
 -- ==========================================
 --  DRAWING HELPERS
 -- ==========================================
-local DrawingNew = Drawing.new
+-- Protection Drawing (peut etre nil quand charge via loadstring/URL)
+local DrawingNew
+if type(Drawing) == "table" and type(Drawing.new) == "function" then
+    DrawingNew = Drawing.new
+else
+    -- Stub silencieux : retourne un objet factice pour eviter le crash
+    DrawingNew = function(_)
+        return setmetatable({}, {
+            __index    = function() return function() end end,
+            __newindex = function() end,
+        })
+    end
+end
 
 local function mkLine(color, thick)
     local l = DrawingNew("Line")
@@ -255,8 +277,9 @@ local function applyEntityESP(model)
     hl.DepthMode           = Enum.HighlightDepthMode.AlwaysOnTop
     hl.Adornee             = model
     hl.Enabled             = false
-    pcall(function() hl.Parent = CoreGui end)
-    if not hl.Parent or not hl.Parent.Parent then hl.Parent = LP.PlayerGui end
+    if not pcall(function() hl.Parent = CoreGui end) or not hl.Parent then
+        pcall(function() hl.Parent = LP.PlayerGui end)
+    end
 
     local lbl   = makeLabel(head, color)
     lbl.Text    = plr and plr.Name or model.Name
@@ -401,8 +424,9 @@ local function applyItemESP(obj)
     hl.DepthMode           = Enum.HighlightDepthMode.AlwaysOnTop
     hl.Adornee             = obj
     hl.Enabled             = false
-    pcall(function() hl.Parent = CoreGui end)
-    if not hl.Parent or not hl.Parent.Parent then hl.Parent = LP.PlayerGui end
+    if not pcall(function() hl.Parent = CoreGui end) or not hl.Parent then
+        pcall(function() hl.Parent = LP.PlayerGui end)
+    end
 
     local lbl = makeLabel(root, S.C_ITEM, UDim2.new(0,150,0,22), Vector3.new(0,3,0))
     lbl.Text  = obj.Name
@@ -596,11 +620,9 @@ local Win = Rayfield:CreateWindow({
 
 -- Onglets = sections cliquables
 local TPlr  = Win:CreateTab("Players",    4483362458)
-local TNPC  = Win:CreateTab("NPC",        4483362458)
-local TItm  = Win:CreateTab("Items",      4483362458)
+local TNPC  = Win:CreateTab("NPC / Items", 4483362458)
 local TAim  = Win:CreateTab("Aimbot",     4483362458)
 local TMov  = Win:CreateTab("Movement",   4483362458)
-local TBlnk = Win:CreateTab("Auto Blink", 4483362458)
 local TMsc  = Win:CreateTab("Misc",       4483362458)
 
 -- ============ ONGLET : PLAYERS ============
@@ -707,9 +729,10 @@ TNPC:CreateColorPicker({ Name = "Couleur NPC", Color = S.C_NPC,
 })
 
 -- ============ ONGLET : ITEMS ============
-TItm:CreateSection("Item ESP")
+-- ============ ITEM ESP (fusionne dans NPC / Items) ============
+TNPC:CreateSection("Item ESP")
 
-TItm:CreateToggle({ Name = "Item ESP Universal", CurrentValue = false,
+TNPC:CreateToggle({ Name = "Item ESP Universal", CurrentValue = false,
     Callback = function(v)
         S.ESP_Item = v
         if v then task.spawn(scanItems) end
@@ -717,13 +740,13 @@ TItm:CreateToggle({ Name = "Item ESP Universal", CurrentValue = false,
     end,
 })
 
-TItm:CreateToggle({ Name = "Afficher Distance", CurrentValue = true,
+TNPC:CreateToggle({ Name = "Afficher Distance (Items)", CurrentValue = true,
     Callback = function(v) S.ESP_ShowDist = v end,
 })
 
-TItm:CreateSection("Apparence")
+TNPC:CreateSection("Apparence Items")
 
-TItm:CreateColorPicker({ Name = "Couleur Items", Color = S.C_ITEM,
+TNPC:CreateColorPicker({ Name = "Couleur Items", Color = S.C_ITEM,
     Callback = function(v)
         S.C_ITEM = v
         for _, d in pairs(iESP) do d.hl.FillColor=v; d.label.TextColor3=v end
@@ -925,9 +948,10 @@ TMov:CreateButton({ Name = "Se teleporter",
 })
 
 -- ============ ONGLET : AUTO BLINK ============
-TBlnk:CreateSection("Configuration")
+-- ============ AUTO BLINK (fusionne dans Movement) ============
+TMov:CreateSection("Auto Blink")
 
-TBlnk:CreateToggle({ Name = "Auto Blink", CurrentValue = false,
+TMov:CreateToggle({ Name = "Auto Blink", CurrentValue = false,
     Callback = function(v)
         S.AutoBlink = v
         _blinkLast  = 0
@@ -941,17 +965,17 @@ TBlnk:CreateToggle({ Name = "Auto Blink", CurrentValue = false,
     end,
 })
 
-TBlnk:CreateSlider({ Name = "Intervalle (secondes)", Range={1,10}, Increment=1, CurrentValue=3,
+TMov:CreateSlider({ Name = "Intervalle (secondes)", Range={1,10}, Increment=1, CurrentValue=3,
     Callback = function(v) S.BlinkInterval = v end,
 })
 
-TBlnk:CreateSlider({ Name = "Distance (studs)", Range={2,20}, Increment=1, CurrentValue=8,
+TMov:CreateSlider({ Name = "Distance (studs)", Range={2,20}, Increment=1, CurrentValue=8,
     Callback = function(v) S.BlinkDist = v end,
 })
 
-TBlnk:CreateSection("Indicateur Cyclone")
+TMov:CreateSection("Indicateur Cyclone")
 
-TBlnk:CreateToggle({ Name = "Afficher le Cyclone (ESP cercle)", CurrentValue = true,
+TMov:CreateToggle({ Name = "Afficher le Cyclone (ESP cercle)", CurrentValue = true,
     Callback = function(v)
         S.BlinkCyclone = v
         if not v then setCycloneVisible(false) end
@@ -1016,9 +1040,20 @@ if isMobile then
     local bM,fM = mkBtn("VAPE", Color3.fromRGB(0,255,150))
     fM.Size=UDim2.new(0,62,0,38); fM.Position=UDim2.new(1,-76,0,56)
     bM.MouseButton1Click:Connect(function()
-        for _, v in ipairs(CoreGui:GetChildren()) do
-            if v.Name:find("Ray".."field") then v.Enabled = not v.Enabled end
+        -- Cherche la GUI Rayfield dans CoreGui ET PlayerGui
+        local function toggleRayfield(container)
+            if not container then return end
+            local ok3, children = pcall(function() return container:GetChildren() end)
+            if ok3 and children then
+                for _, v in ipairs(children) do
+                    if v.Name:find("Ray".."field") then
+                        pcall(function() v.Enabled = not v.Enabled end)
+                    end
+                end
+            end
         end
+        toggleRayfield(CoreGui)
+        if CoreGui ~= LP.PlayerGui then toggleRayfield(LP.PlayerGui) end
     end)
 end
 
