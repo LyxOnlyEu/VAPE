@@ -11,18 +11,38 @@
 -- ==========================================
 --  LOADER RAYFIELD
 -- ==========================================
-local _url = table.concat({"https","://","sirius",".","menu","/","ray".."field"})
-local ok, raw = pcall(game.HttpGet, game, _url)
-if not ok or not raw then warn("[VAPE] Rayfield unreachable.") return end
-local _lsfn = loadstring or load
-if not _lsfn then warn("[VAPE] loadstring unavailable") return end
-local _rfLoader = _lsfn(raw)
-if not _rfLoader then warn("[VAPE] Failed to load Rayfield") return end
-task.wait()  -- laisse le temps au loader de s'initialiser correctement
-local Rayfield = _rfLoader()
-if not Rayfield or type(Rayfield) ~= "table" then
-    warn("[VAPE] Rayfield() returned nil — verifie ta connexion ou le lien Rayfield.")
-    return
+local Rayfield
+do
+    local _url = table.concat({"https","://","sirius",".","menu","/","ray".."field"})
+    local ok1, raw = pcall(game.HttpGet, game, _url)
+    if not ok1 or not raw or raw == "" then
+        warn("[VAPE] Rayfield unreachable.") return
+    end
+    local _lsfn = loadstring or load
+    if not _lsfn then warn("[VAPE] loadstring unavailable") return end
+    local ok2, _rfLoader = pcall(_lsfn, raw)
+    if not ok2 or type(_rfLoader) ~= "function" then
+        warn("[VAPE] Failed to compile Rayfield") return
+    end
+    task.wait(0.1)
+    local ok3, result = pcall(_rfLoader)
+    if not ok3 then
+        warn("[VAPE] Rayfield execution error: " .. tostring(result)) return
+    end
+    -- Rayfield peut retourner une table directement ou rien (init globale)
+    if type(result) == "table" then
+        Rayfield = result
+    elseif type(result) == "function" then
+        local ok4, r2 = pcall(result)
+        Rayfield = ok4 and r2 or nil
+    else
+        -- Certains loaders initialisent Rayfield en global
+        task.wait(0.2)
+        Rayfield = rawget(_G, "Rayfield") or rawget(_G, "rayfield")
+    end
+    if not Rayfield or type(Rayfield) ~= "table" then
+        warn("[VAPE] Rayfield introuvable apres chargement.") return
+    end
 end
 
 -- ==========================================
@@ -606,13 +626,13 @@ local function doBlink()
 
     if not blinkDest then
         pcall(function()
-            Rayfield:Notify({ Title="Blink", Content="Aucun joueur a proximite", Duration=2 })
+            pcall(function() Rayfield:Notify({ Title="Blink", Content="Aucun joueur a proximite", Duration=2 }) end)
         end)
         return
     end
     if blinkDest.Y < -400 then
         pcall(function()
-            Rayfield:Notify({ Title="Blink annule", Content="Zone de vide", Duration=2 })
+            pcall(function() Rayfield:Notify({ Title="Blink annule", Content="Zone de vide", Duration=2 }) end)
         end)
         blinkDest = nil; return
     end
@@ -626,18 +646,33 @@ end
 --  Chaque section = un onglet separe.
 --  Cliquer l'onglet ouvre ses options.
 -- ==========================================
-local Win = Rayfield:CreateWindow({
-    Name            = "VAPE UNIVERSAL  |  by LV_SDZ/MODZ",
-    LoadingTitle    = "VAPE UNIVERSAL",
-    LoadingSubtitle = "by LV_SDZ/MODZ",
-    ConfigurationSaving = { Enabled = false },
-})
-
--- Onglets = sections cliquables
-local TESP  = Win:CreateTab("ESP",        4483362458)
-local TAim  = Win:CreateTab("Aimbot",     4483362458)
-local TMov  = Win:CreateTab("Movement",   4483362458)
-local TMsc  = Win:CreateTab("Misc",       4483362458)
+local Win, TESP, TAim, TMov, TMsc
+do
+    local ok_w, w = pcall(function()
+        return Rayfield:CreateWindow({
+            Name            = "VAPE UNIVERSAL  |  by LV_SDZ/MODZ",
+            LoadingTitle    = "VAPE UNIVERSAL",
+            LoadingSubtitle = "by LV_SDZ/MODZ",
+            ConfigurationSaving = { Enabled = false },
+        })
+    end)
+    if not ok_w or not w then
+        warn("[VAPE] Rayfield:CreateWindow a echoue.") return
+    end
+    Win = w
+    local function mkTab(name, icon)
+        local ok_t, t = pcall(function() return Win:CreateTab(name, icon) end)
+        if not ok_t or not t then warn("[VAPE] CreateTab echoue: "..name) return nil end
+        return t
+    end
+    TESP = mkTab("ESP",      4483362458)
+    TAim = mkTab("Aimbot",   4483362458)
+    TMov = mkTab("Movement", 4483362458)
+    TMsc = mkTab("Misc",     4483362458)
+    if not (TESP and TAim and TMov and TMsc) then
+        warn("[VAPE] Un ou plusieurs onglets n'ont pas pu etre crees.") return
+    end
+end
 
 -- ============ ONGLET : PLAYERS ============
 TESP:CreateSection("Visibilite")
@@ -837,7 +872,7 @@ TAim:CreateToggle({
     Callback = function(v)
         S.RivalsMode = v
         if not v then stopRivalsGyro() end
-        Rayfield:Notify({
+        pcall(function() Rayfield:Notify({ end)
             Title   = v and "Rivals Mode ON" or "Rivals Mode OFF",
             Content = v and "Activer aussi l'Aimbot pour l'effet complet" or "Gyro desactive",
             Duration = 3,
@@ -932,32 +967,32 @@ TMov:CreateButton({ Name = "Rafraichir la liste",
     Callback = function()
         local n = getNames()
         pcall(function() TPDrop:Refresh(n, true) end)
-        Rayfield:Notify({ Title="Liste mise a jour", Content=#n.." joueur(s)", Duration=2 })
+        pcall(function() Rayfield:Notify({ Title="Liste mise a jour", Content=#n.." joueur(s)", Duration=2 }) end)
     end,
 })
 
 TMov:CreateButton({ Name = "Se teleporter",
     Callback = function()
         if not selTP or selTP=="" then
-            Rayfield:Notify({ Title="Erreur", Content="Selectionne un joueur", Duration=3 }) return
+            pcall(function() Rayfield:Notify({ Title="Erreur", Content="Selectionne un joueur", Duration=3 }) return end)
         end
         local target
         for _, p in ipairs(Players:GetPlayers()) do
             if p.Name==selTP then target=p; break end
         end
         if not target then
-            Rayfield:Notify({ Title="Erreur", Content=selTP.." n'est plus en jeu", Duration=3 }) return
+            pcall(function() Rayfield:Notify({ Title="Erreur", Content=selTP.." n'est plus en jeu", Duration=3 }) return end)
         end
         local tHRP  = target.Character and target.Character:FindFirstChild("HumanoidRootPart")
         local myHRP = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
-        if not tHRP  then Rayfield:Notify({ Title="Erreur", Content="Cible sans corps",     Duration=3 }) return end
-        if not myHRP then Rayfield:Notify({ Title="Erreur", Content="Ton perso introuvable", Duration=3 }) return end
+        pcall(function() if not tHRP  then Rayfield:Notify({ Title="Erreur", Content="Cible sans corps",     Duration=3 }) return end end)
+        if not myHRP then pcall(function() Rayfield:Notify({ Title="Erreur", Content="Ton perso introuvable", Duration=3 }) end) return end
         local dest = tHRP.CFrame * CFrame.new(0,4,0)
         if dest.Position.Y < -400 then
-            Rayfield:Notify({ Title="TP annule", Content="Zone de vide detectee", Duration=3 }) return
+            pcall(function() Rayfield:Notify({ Title="TP annule", Content="Zone de vide detectee", Duration=3 }) return end)
         end
         myHRP.CFrame = dest
-        Rayfield:Notify({ Title="TP OK", Content="-> "..selTP, Duration=3 })
+        pcall(function() Rayfield:Notify({ Title="TP OK", Content="-> "..selTP, Duration=3 }) end)
     end,
 })
 
@@ -970,7 +1005,7 @@ TMov:CreateToggle({ Name = "Auto Blink", CurrentValue = false,
         S.AutoBlink = v
         _blinkLast  = 0
         if not v then blinkDest=nil; setCycloneVisible(false) end
-        Rayfield:Notify({
+        pcall(function() Rayfield:Notify({ end)
             Title   = v and "Auto Blink ON" or "Auto Blink OFF",
             Content = v and ("Blink toutes les "..S.BlinkInterval.."s | Anti-void actif")
                         or "Desactive",
@@ -1325,7 +1360,7 @@ task.spawn(function()
     end
 end)
 
-Rayfield:Notify({
+pcall(function() Rayfield:Notify({ end)
     Title    = "VAPE UNIVERSAL",
     Content  = "Loaded by LV_SDZ/MODZ",
     Duration = 4,
