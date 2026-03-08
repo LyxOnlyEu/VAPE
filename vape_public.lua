@@ -245,10 +245,14 @@ end
 
 local function isSafePosition(pos)
     local rp = RaycastParams.new()
-    rp.FilterDescendantsInstances = { LP.Character }
+    local char = LP.Character
+    rp.FilterDescendantsInstances = char and {char} or {}
     rp.FilterType = Enum.RaycastFilterType.Exclude
-    local res = workspace:Raycast(pos + Vector3.new(0,2,0), Vector3.new(0,-9,0), rp)
-    if res and res.Position.Y > -500 then
+    -- Raycast plus long (50 studs) pour couvrir toutes les maps
+    local ok, res = pcall(function()
+        return workspace:Raycast(pos + Vector3.new(0,3,0), Vector3.new(0,-50,0), rp)
+    end)
+    if ok and res and res.Position.Y > -500 then
         return true, res.Position
     end
     return false, nil
@@ -536,19 +540,12 @@ local _blinkLast = 0
 
 local function calcBlinkDest(myHRP)
     local closest, closestDist = nil, math.huge
-    local myLook = Vector3.new(myHRP.CFrame.LookVector.X, 0, myHRP.CFrame.LookVector.Z)
-    if myLook.Magnitude > 0.01 then myLook = myLook.Unit end
 
+    -- Recherche 360 degres : aucun filtre directionnel
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= LP and p.Character and isAlive(p.Character) then
             local tHRP = p.Character:FindFirstChild("HumanoidRootPart")
             if tHRP then
-                local toT = Vector3.new(
-                    tHRP.Position.X - myHRP.Position.X, 0,
-                    tHRP.Position.Z - myHRP.Position.Z
-                )
-                if toT.Magnitude > 0.01 then toT = toT.Unit end
-                if myLook:Dot(toT) <= 0 then continue end  -- cible derriere -> skip
                 local d = (myHRP.Position - tHRP.Position).Magnitude
                 if d < closestDist then closestDist=d; closest=tHRP end
             end
@@ -556,29 +553,39 @@ local function calcBlinkDest(myHRP)
     end
     if not closest then return nil end
 
+    -- Direction : depuis la cible vers nous (on se place derriere elle)
     local dirRaw = Vector3.new(
         myHRP.Position.X - closest.Position.X, 0,
         myHRP.Position.Z - closest.Position.Z
     )
+    local myLook = Vector3.new(myHRP.CFrame.LookVector.X, 0, myHRP.CFrame.LookVector.Z)
+    if myLook.Magnitude > 0.01 then myLook = myLook.Unit end
     local dir  = dirRaw.Magnitude > 0.1 and dirRaw.Unit or (-myLook)
     local dist = S.BlinkDist
 
+    -- Essai 1 : dans notre direction par rapport a la cible
     local c1 = closest.Position + dir * dist + Vector3.new(0,0.5,0)
     local s1, g1 = isSafePosition(c1)
     if s1 and g1 then return Vector3.new(c1.X, g1.Y+3, c1.Z) end
 
-    local c2 = closest.Position + closest.CFrame.RightVector * dist + Vector3.new(0,0.5,0)
-    local s2, g2 = isSafePosition(c2)
-    if s2 and g2 then return Vector3.new(c2.X, g2.Y+3, c2.Z) end
+    -- Essai 2 & 3 : sur les cotes de la cible
+    local ok2, rv2 = pcall(function() return closest.CFrame.RightVector end)
+    if ok2 and rv2 then
+        local c2 = closest.Position + rv2 * dist + Vector3.new(0,0.5,0)
+        local s2, g2 = isSafePosition(c2)
+        if s2 and g2 then return Vector3.new(c2.X, g2.Y+3, c2.Z) end
 
-    local c3 = closest.Position - closest.CFrame.RightVector * dist + Vector3.new(0,0.5,0)
-    local s3, g3 = isSafePosition(c3)
-    if s3 and g3 then return Vector3.new(c3.X, g3.Y+3, c3.Z) end
+        local c3 = closest.Position - rv2 * dist + Vector3.new(0,0.5,0)
+        local s3, g3 = isSafePosition(c3)
+        if s3 and g3 then return Vector3.new(c3.X, g3.Y+3, c3.Z) end
+    end
 
-    local s4, _ = isSafePosition(closest.Position)
-    if s4 then return Vector3.new(closest.Position.X, closest.Position.Y+3.5, closest.Position.Z) end
+    -- Essai 4 : directement sur la cible
+    local s4, g4 = isSafePosition(closest.Position)
+    if s4 and g4 then return Vector3.new(closest.Position.X, g4.Y+3, closest.Position.Z) end
 
-    return nil
+    -- Fallback : position brute de la cible + hauteur
+    return Vector3.new(closest.Position.X, closest.Position.Y+3.5, closest.Position.Z)
 end
 
 local function doBlink()
@@ -588,22 +595,30 @@ local function doBlink()
     local myHRP = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
     if not myHRP then return end
 
-    blinkDest = calcBlinkDest(myHRP)
+    -- Calcul de destination (chaque frame pour le cyclone)
+    local ok_calc, dest = pcall(calcBlinkDest, myHRP)
+    blinkDest = ok_calc and dest or nil
 
+    -- Verif intervalle
     local now = os.clock()
     if now - _blinkLast < S.BlinkInterval then return end
     _blinkLast = now
 
     if not blinkDest then
-        Rayfield:Notify({ Title="Blink annule", Content="Aucune destination safe", Duration=2 })
+        pcall(function()
+            Rayfield:Notify({ Title="Blink", Content="Aucun joueur a proximite", Duration=2 })
+        end)
         return
     end
     if blinkDest.Y < -400 then
-        Rayfield:Notify({ Title="Blink annule", Content="Zone de vide detectee", Duration=2 })
+        pcall(function()
+            Rayfield:Notify({ Title="Blink annule", Content="Zone de vide", Duration=2 })
+        end)
         blinkDest = nil; return
     end
-    myHRP.CFrame = CFrame.new(blinkDest)
-    blinkDest    = nil
+    -- Teleportation protegee
+    pcall(function() myHRP.CFrame = CFrame.new(blinkDest) end)
+    blinkDest = nil
 end
 
 -- ==========================================
@@ -619,16 +634,15 @@ local Win = Rayfield:CreateWindow({
 })
 
 -- Onglets = sections cliquables
-local TPlr  = Win:CreateTab("Players",    4483362458)
-local TNPC  = Win:CreateTab("NPC / Items", 4483362458)
+local TESP  = Win:CreateTab("ESP",        4483362458)
 local TAim  = Win:CreateTab("Aimbot",     4483362458)
 local TMov  = Win:CreateTab("Movement",   4483362458)
 local TMsc  = Win:CreateTab("Misc",       4483362458)
 
 -- ============ ONGLET : PLAYERS ============
-TPlr:CreateSection("Visibilite")
+TESP:CreateSection("Visibilite")
 
-TPlr:CreateToggle({ Name = "Player ESP (Highlight)", CurrentValue = false,
+TESP:CreateToggle({ Name = "Player ESP (Highlight)", CurrentValue = false,
     Callback = function(v)
         S.ESP_Player = v
         for _, d in pairs(eESP) do
@@ -637,7 +651,7 @@ TPlr:CreateToggle({ Name = "Player ESP (Highlight)", CurrentValue = false,
     end,
 })
 
-TPlr:CreateToggle({ Name = "Health Bar", CurrentValue = false,
+TESP:CreateToggle({ Name = "Health Bar", CurrentValue = false,
     Callback = function(v)
         S.ESP_HealthBar = v
         if not v then
@@ -648,7 +662,7 @@ TPlr:CreateToggle({ Name = "Health Bar", CurrentValue = false,
     end,
 })
 
-TPlr:CreateToggle({ Name = "Tracer Lines", CurrentValue = false,
+TESP:CreateToggle({ Name = "Tracer Lines", CurrentValue = false,
     Callback = function(v)
         S.ESP_Traceline = v
         if not v then
@@ -657,20 +671,20 @@ TPlr:CreateToggle({ Name = "Tracer Lines", CurrentValue = false,
     end,
 })
 
-TPlr:CreateToggle({ Name = "Box 3D", CurrentValue = false,
+TESP:CreateToggle({ Name = "Box 3D", CurrentValue = false,
     Callback = function(v)
         S.ESP_Box3D = v
         for _, d in pairs(eESP) do if d.isPlayer then d.box3d.Visible=v end end
     end,
 })
 
-TPlr:CreateToggle({ Name = "Afficher Distance", CurrentValue = true,
+TESP:CreateToggle({ Name = "Afficher Distance", CurrentValue = true,
     Callback = function(v) S.ESP_ShowDist = v end,
 })
 
-TPlr:CreateSection("Apparence")
+TESP:CreateSection("Apparence")
 
-TPlr:CreateColorPicker({ Name = "Couleur Players", Color = S.C_PLAYER,
+TESP:CreateColorPicker({ Name = "Couleur Players", Color = S.C_PLAYER,
     Callback = function(v)
         S.C_PLAYER = v
         for _, d in pairs(eESP) do
@@ -683,9 +697,9 @@ TPlr:CreateColorPicker({ Name = "Couleur Players", Color = S.C_PLAYER,
 })
 
 -- ============ ONGLET : NPC ============
-TNPC:CreateSection("Visibilite")
+TESP:CreateSection("Visibilite")
 
-TNPC:CreateToggle({ Name = "NPC / Monster ESP", CurrentValue = false,
+TESP:CreateToggle({ Name = "NPC / Monster ESP", CurrentValue = false,
     Callback = function(v)
         S.ESP_NPC = v
         for _, d in pairs(eESP) do
@@ -694,7 +708,7 @@ TNPC:CreateToggle({ Name = "NPC / Monster ESP", CurrentValue = false,
     end,
 })
 
-TNPC:CreateToggle({ Name = "Health Bar NPC", CurrentValue = false,
+TESP:CreateToggle({ Name = "Health Bar NPC", CurrentValue = false,
     Callback = function(v)
         S.ESP_HealthBar = v
         if not v then
@@ -705,7 +719,7 @@ TNPC:CreateToggle({ Name = "Health Bar NPC", CurrentValue = false,
     end,
 })
 
-TNPC:CreateToggle({ Name = "Tracer Lines NPC", CurrentValue = false,
+TESP:CreateToggle({ Name = "Tracer Lines NPC", CurrentValue = false,
     Callback = function(v)
         S.ESP_Traceline = v
         if not v then
@@ -714,9 +728,9 @@ TNPC:CreateToggle({ Name = "Tracer Lines NPC", CurrentValue = false,
     end,
 })
 
-TNPC:CreateSection("Apparence")
+TESP:CreateSection("Apparence")
 
-TNPC:CreateColorPicker({ Name = "Couleur NPC", Color = S.C_NPC,
+TESP:CreateColorPicker({ Name = "Couleur NPC", Color = S.C_NPC,
     Callback = function(v)
         S.C_NPC = v
         for _, d in pairs(eESP) do
@@ -730,9 +744,9 @@ TNPC:CreateColorPicker({ Name = "Couleur NPC", Color = S.C_NPC,
 
 -- ============ ONGLET : ITEMS ============
 -- ============ ITEM ESP (fusionne dans NPC / Items) ============
-TNPC:CreateSection("Item ESP")
+TESP:CreateSection("Item ESP")
 
-TNPC:CreateToggle({ Name = "Item ESP Universal", CurrentValue = false,
+TESP:CreateToggle({ Name = "Item ESP Universal", CurrentValue = false,
     Callback = function(v)
         S.ESP_Item = v
         if v then task.spawn(scanItems) end
@@ -740,13 +754,13 @@ TNPC:CreateToggle({ Name = "Item ESP Universal", CurrentValue = false,
     end,
 })
 
-TNPC:CreateToggle({ Name = "Afficher Distance (Items)", CurrentValue = true,
+TESP:CreateToggle({ Name = "Afficher Distance (Items)", CurrentValue = true,
     Callback = function(v) S.ESP_ShowDist = v end,
 })
 
-TNPC:CreateSection("Apparence Items")
+TESP:CreateSection("Apparence Items")
 
-TNPC:CreateColorPicker({ Name = "Couleur Items", Color = S.C_ITEM,
+TESP:CreateColorPicker({ Name = "Couleur Items", Color = S.C_ITEM,
     Callback = function(v)
         S.C_ITEM = v
         for _, d in pairs(iESP) do d.hl.FillColor=v; d.label.TextColor3=v end
