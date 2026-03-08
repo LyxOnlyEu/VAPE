@@ -290,7 +290,7 @@ end
 local function mkLine(color, thick)
     local l = DrawingNew("Line")
     l.Color=color or Color3.new(1,1,1); l.Thickness=thick or 1.5
-    l.Transparency=1; l.Visible=false; return l
+    l.Transparency=0; l.Visible=false; return l
 end
 local function newHBar()
     return { bg=mkLine(Color3.fromRGB(15,15,15),5), bar=mkLine(Color3.fromRGB(80,255,80),3) }
@@ -303,7 +303,7 @@ local function newBox3D(adornee, color)
 end
 
 local FOVC = DrawingNew("Circle")
-FOVC.Thickness=1.5; FOVC.NumSides=64; FOVC.Transparency=1
+FOVC.Thickness=1.5; FOVC.NumSides=64; FOVC.Transparency=0
 FOVC.Color=Color3.fromRGB(255,255,255); FOVC.Visible=false
 
 -- ==========================================
@@ -326,7 +326,11 @@ local R6_BONES = {
 
 local function newSkeleton(color)
     local lines={}
-    for i=1,16 do lines[i]=mkLine(color,1.2) end
+    for i=1,16 do
+        local l = DrawingNew("Line")
+        l.Color=color; l.Thickness=1.2; l.Transparency=0; l.Visible=false
+        lines[i]=l
+    end
     return lines
 end
 
@@ -368,7 +372,10 @@ end
 local CYCLONE_SEGS = 24
 local cycloneLines = {}
 for i=1,CYCLONE_SEGS do
-    local l=mkLine(Color3.fromRGB(180,80,255),1.4); l.Transparency=0.8; cycloneLines[i]=l
+    local l = DrawingNew("Line")
+    l.Color=Color3.fromRGB(180,80,255); l.Thickness=1.4
+    l.Transparency=0.4; l.Visible=false
+    cycloneLines[i]=l
 end
 local cycloneAngle = 0
 local blinkDest    = nil
@@ -513,17 +520,32 @@ end
 
 local function scanPlayers()
     for _,p in ipairs(Players:GetPlayers()) do
-        if p ~= LP and p.Character then task.defer(applyEntityESP, p.Character) end
+        if p ~= LP and p.Character then
+            task.defer(applyEntityESP, p.Character)
+        end
     end
 end
-Players.PlayerAdded:Connect(function(p)
-    p.CharacterAdded:Connect(function(c) task.wait(1); applyEntityESP(c) end)
-end)
-for _,p in ipairs(Players:GetPlayers()) do
-    if p ~= LP then
-        p.CharacterAdded:Connect(function(c) task.wait(1); applyEntityESP(c) end)
+
+-- Connexion CharacterAdded pour tous les joueurs actuels ET futurs
+local function hookPlayer(p)
+    if p == LP then return end
+    p.CharacterAdded:Connect(function(c)
+        -- Attendre que le character soit entièrement chargé (HumanoidRootPart présent)
+        local hrp = c:WaitForChild("HumanoidRootPart", 5)
+        if hrp then
+            task.wait(0.1)
+            applyEntityESP(c)
+        end
+    end)
+    -- Si le joueur a déjà un character au moment où on hook
+    if p.Character then
+        task.defer(applyEntityESP, p.Character)
     end
 end
+
+Players.PlayerAdded:Connect(hookPlayer)
+for _,p in ipairs(Players:GetPlayers()) do hookPlayer(p) end
+
 workspace.DescendantAdded:Connect(function(o)
     if o:IsA("Model") and not Players:GetPlayerFromCharacter(o) then
         task.defer(applyEntityESP, o)
@@ -860,13 +882,15 @@ end
 --  MASTER KEYBIND (tout ON/OFF)
 -- ==========================================
 local _masterEnabled = true
+-- MasterKey stocké comme string du KeyCode name pour comparaison robuste
 UIS.InputBegan:Connect(function(inp, processed)
     if processed then return end
-    -- Master key
-    if S.MasterKey and inp.KeyCode == S.MasterKey then
-        _masterEnabled = not _masterEnabled
-        Notify("VAPE", _masterEnabled and "Modules ON" or "Modules OFF", 2)
-        return
+    if S.MasterKey and inp.KeyCode ~= Enum.KeyCode.Unknown then
+        local inputName = tostring(inp.KeyCode):gsub("Enum.KeyCode.","")
+        if inputName == S.MasterKey then
+            _masterEnabled = not _masterEnabled
+            Notify("VAPE", _masterEnabled and "✓ Modules ON" or "✗ Modules OFF", 2)
+        end
     end
 end)
 
@@ -905,6 +929,10 @@ end
 TESP:CreateSection("Players")
 TESP:CreateToggle({Name="Player ESP",CurrentValue=S.ESP_Player,Callback=function(v)
     S.ESP_Player=v
+    if v then
+        -- Re-scanner tous les joueurs actuels au cas où certains manquent
+        task.spawn(scanPlayers)
+    end
     for _,d in pairs(eESP) do if d.isPlayer then d.hl.Enabled=v; d.label.Visible=v end end
 end})
 TESP:CreateToggle({Name="Health Bar (Players)",CurrentValue=S.ESP_HealthBar_P,Callback=function(v)
@@ -1071,7 +1099,10 @@ TMov:CreateToggle({Name="Speed Hack",CurrentValue=false,Callback=function(v) S.S
 TMov:CreateSlider({Name="Speed Value",Range={16,300},Increment=1,CurrentValue=S.SpeedVal,
     Callback=function(v) S.SpeedVal=v end})
 TMov:CreateToggle({Name="Infinite Jump",CurrentValue=false,Callback=function(v) S.InfJump=v end})
-TMov:CreateToggle({Name="Noclip",CurrentValue=false,Callback=function(v) S.Noclip=v end})
+TMov:CreateToggle({Name="Noclip",CurrentValue=false,Callback=function(v)
+    S.Noclip=v
+    if v then startNoclip() else stopNoclip() end
+end})
 TMov:CreateToggle({Name="Anti-Void",CurrentValue=S.AntiVoid,Callback=function(v)
     S.AntiVoid=v
     -- Sauvegarder la position actuelle comme point de retour
@@ -1218,19 +1249,29 @@ end})
 TMsc:CreateSection("Master Keybind")
 TMsc:CreateDropdown({Name="Keybind Master ON/OFF",Options={
     "Aucun","Insert","Delete","Home","End","F5","F6","F7","F8","F9","F10",
-    "RightBracket","BackSlash","Equals",
+    "RightBracket","BackSlash","Equals","NumLock","Pause",
 },CurrentOption={"Aucun"},Callback=function(opt)
     local v=type(opt)=="table" and opt[1] or tostring(opt)
-    if v=="Aucun" then S.MasterKey=nil; return end
-    local ok2,kc=pcall(function() return Enum.KeyCode[v] end)
-    if ok2 and kc then S.MasterKey=kc; Notify("Master Key",v.." configure",2) end
+    if v=="Aucun" then S.MasterKey=nil; Notify("Master Key","Desactive",2); return end
+    -- Valider que le KeyCode existe
+    local ok,kc = pcall(function() return Enum.KeyCode[v] end)
+    if ok and kc and kc ~= Enum.KeyCode.Unknown then
+        S.MasterKey = v  -- stocker le NOM (string), pas l'enum
+        Notify("Master Key", v.." configure - appuie pour toggle",3)
+    else
+        Notify("Master Key","KeyCode invalide",2)
+    end
 end})
 
 TMsc:CreateSection("Theme")
-TMsc:CreateColorPicker({Name="Couleur Accent",Color=S.ThemeAccent,Callback=function(v)
+TMsc:CreateColorPicker({Name="Couleur Accent (FPS bar + FOV)",Color=S.ThemeAccent,Callback=function(v)
     S.ThemeAccent=v
-    -- Appliquer à la FPS bar et au stroke
-    Notify("Theme","Couleur sauvegardee au prochain save",2)
+    -- Application immédiate via _G.VapeFpsStroke si disponible
+    pcall(function()
+        if _G.VapeFpsStroke then _G.VapeFpsStroke.Color=v end
+        if _drawingOk then FOVC.Color=v end
+    end)
+    Notify("Theme","Couleur appliquee !",2)
 end})
 
 -- ==========================================
@@ -1290,7 +1331,7 @@ UIS.JumpRequest:Connect(function()
 end)
 
 -- ==========================================
---  FPS COUNTER
+--  FPS COUNTER + THEME APPLIER
 -- ==========================================
 do
     local sg=Instance.new("ScreenGui"); sg.Name="VapeFPS"; sg.ResetOnSpawn=false; safeParent(sg)
@@ -1301,40 +1342,92 @@ do
     lbl.Font=Enum.Font.GothamBold; lbl.TextSize=12
     lbl.TextXAlignment=Enum.TextXAlignment.Center; lbl.Text="VAPE UNIVERSAL | FPS: --"
     Instance.new("UICorner",lbl).CornerRadius=UDim.new(0,6)
-    local st=Instance.new("UIStroke",lbl)
-    st.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
-    st.Color=S.ThemeAccent; st.Thickness=1; st.Transparency=0.4
+    local fpsStroke=Instance.new("UIStroke",lbl)
+    fpsStroke.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+    fpsStroke.Color=S.ThemeAccent; fpsStroke.Thickness=1; fpsStroke.Transparency=0.4
     local last,fc=os.clock(),0
+    local _lastThemeR, _lastThemeG, _lastThemeB = S.ThemeAccent.R, S.ThemeAccent.G, S.ThemeAccent.B
     RS.RenderStepped:Connect(function()
         fc+=1; local now=os.clock()
         if now-last>=1 then
             lbl.Text=string.format("VAPE | FPS: %d | %s",fc,_masterEnabled and "ON" or "OFF")
             fc=0; last=now
         end
-        -- Appliquer theme accent dynamiquement
-        if st.Color ~= S.ThemeAccent then st.Color=S.ThemeAccent end
+        -- Appliquer theme accent si changé (comparaison valeur RGB)
+        local tr, tg, tb = S.ThemeAccent.R, S.ThemeAccent.G, S.ThemeAccent.B
+        if tr~=_lastThemeR or tg~=_lastThemeG or tb~=_lastThemeB then
+            _lastThemeR=tr; _lastThemeG=tg; _lastThemeB=tb
+            fpsStroke.Color = S.ThemeAccent
+            -- Propager à l'accent du FOV circle
+            if _drawingOk then FOVC.Color = S.ThemeAccent end
+        end
     end)
+    -- Exposer le stroke pour usage externe
+    _G.VapeFpsStroke = fpsStroke
 end
 
 -- ==========================================
---  NOCLIP
+--  NOCLIP (réécriture complète)
+--  - PlatformStand retiré (causait instabilité)
+--  - CanCollide=false sur tous les BasePart du character
+--  - Restauration propre à la désactivation
+--  - Connexion sur CharacterAdded pour reset auto
 -- ==========================================
-local _noclipWasOn=false
-RS.Stepped:Connect(function()
-    local char=LP.Character; if not char then return end
-    local hum=getHum(char)
+local _noclipActive = false
+local _noclipConn   = nil
+
+local function applyNoclip(char, enable)
+    if not char then return end
+    for _,p in ipairs(char:GetDescendants()) do
+        if p:IsA("BasePart") then
+            -- sethiddenproperty si disponible (bypass protections serveur)
+            local ok = pcall(function()
+                if type(sethiddenproperty) == "function" then
+                    sethiddenproperty(p, "CanCollide", not enable)
+                else
+                    p.CanCollide = not enable
+                end
+            end)
+            if not ok then pcall(function() p.CanCollide = not enable end) end
+        end
+    end
+end
+
+local function startNoclip()
+    if _noclipConn then _noclipConn:Disconnect(); _noclipConn=nil end
+    _noclipActive = true
+    -- Stepped = avant physique, garantit que CanCollide est false chaque frame
+    _noclipConn = RS.Stepped:Connect(function()
+        if not S.Noclip then
+            _noclipActive = false
+            _noclipConn:Disconnect(); _noclipConn=nil
+            local char = LP.Character
+            if char then applyNoclip(char, false) end
+            return
+        end
+        local char = LP.Character
+        if not char then return end
+        for _,p in ipairs(char:GetDescendants()) do
+            if p:IsA("BasePart") and p.CanCollide then
+                pcall(function() p.CanCollide = false end)
+            end
+        end
+    end)
+end
+
+local function stopNoclip()
+    S.Noclip = false
+    _noclipActive = false
+    if _noclipConn then _noclipConn:Disconnect(); _noclipConn=nil end
+    local char = LP.Character
+    if char then applyNoclip(char, false) end
+end
+
+-- Reset noclip au respawn
+LP.CharacterAdded:Connect(function()
     if S.Noclip then
-        _noclipWasOn=true
-        for _,p in ipairs(char:GetDescendants()) do
-            if p:IsA("BasePart") and p.CanCollide then p.CanCollide=false end
-        end
-        if hum then hum.PlatformStand=true end
-    elseif _noclipWasOn then
-        _noclipWasOn=false
-        for _,p in ipairs(char:GetDescendants()) do
-            if p:IsA("BasePart") and not p.CanCollide then p.CanCollide=true end
-        end
-        if hum then hum.PlatformStand=false; hum:ChangeState(Enum.HumanoidStateType.GettingUp) end
+        task.wait(0.5)
+        startNoclip()
     end
 end)
 
