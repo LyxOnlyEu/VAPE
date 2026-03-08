@@ -16,9 +16,14 @@ local ok, raw = pcall(game.HttpGet, game, _url)
 if not ok or not raw then warn("[VAPE] Rayfield unreachable.") return end
 local _lsfn = loadstring or load
 if not _lsfn then warn("[VAPE] loadstring unavailable") return end
-local Rayfield = _lsfn(raw)
-if not Rayfield then warn("[VAPE] Failed to load Rayfield") return end
-Rayfield = Rayfield()
+local _rfLoader = _lsfn(raw)
+if not _rfLoader then warn("[VAPE] Failed to load Rayfield") return end
+task.wait()  -- laisse le temps au loader de s'initialiser correctement
+local Rayfield = _rfLoader()
+if not Rayfield or type(Rayfield) ~= "table" then
+    warn("[VAPE] Rayfield() returned nil — verifie ta connexion ou le lien Rayfield.")
+    return
+end
 
 -- ==========================================
 --  SERVICES
