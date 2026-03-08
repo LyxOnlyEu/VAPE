@@ -31,10 +31,16 @@ end
 local Players  = game:GetService("Players")
 local UIS      = game:GetService("UserInputService")
 local RS       = game:GetService("RunService")
-local CoreGui  = game:GetService("CoreGui")
 local LP       = Players.LocalPlayer
 local Cam      = workspace.CurrentCamera
 local isMobile = UIS.TouchEnabled
+
+-- CoreGui avec fallback sur PlayerGui si acces restreint (loadstring/GitHub)
+local CoreGui
+do
+    local ok, result = pcall(function() return game:GetService("CoreGui") end)
+    CoreGui = (ok and result) or LP:WaitForChild("PlayerGui")
+end
 
 -- ==========================================
 --  SETTINGS
@@ -249,7 +255,8 @@ local function applyEntityESP(model)
     hl.DepthMode           = Enum.HighlightDepthMode.AlwaysOnTop
     hl.Adornee             = model
     hl.Enabled             = false
-    hl.Parent              = CoreGui  -- hors portee des scripts jeu
+    pcall(function() hl.Parent = CoreGui end)
+    if not hl.Parent or not hl.Parent.Parent then hl.Parent = LP.PlayerGui end
 
     local lbl   = makeLabel(head, color)
     lbl.Text    = plr and plr.Name or model.Name
@@ -394,7 +401,8 @@ local function applyItemESP(obj)
     hl.DepthMode           = Enum.HighlightDepthMode.AlwaysOnTop
     hl.Adornee             = obj
     hl.Enabled             = false
-    hl.Parent              = CoreGui
+    pcall(function() hl.Parent = CoreGui end)
+    if not hl.Parent or not hl.Parent.Parent then hl.Parent = LP.PlayerGui end
 
     local lbl = makeLabel(root, S.C_ITEM, UDim2.new(0,150,0,22), Vector3.new(0,3,0))
     lbl.Text  = obj.Name
