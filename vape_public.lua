@@ -139,17 +139,33 @@ local iESP = {}
 -- ==========================================
 --  DRAWING HELPERS
 -- ==========================================
--- Protection Drawing (peut etre nil quand charge via loadstring/URL)
+-- Protection Drawing
+-- Sur PC via site : Drawing existe mais Drawing.new est une C-function (type = "userdata" ou "function")
+-- On teste avec un pcall reel plutot que type()
 local DrawingNew
-if type(Drawing) == "table" and type(Drawing.new) == "function" then
-    DrawingNew = Drawing.new
-else
-    -- Stub silencieux : retourne un objet factice pour eviter le crash
-    DrawingNew = function(_)
-        return setmetatable({}, {
-            __index    = function() return function() end end,
-            __newindex = function() end,
-        })
+local _drawingOk = false
+do
+    local ok, result = pcall(function()
+        local t = Drawing.new("Line")
+        t:Remove()
+        return Drawing.new
+    end)
+    if ok and result then
+        DrawingNew   = result
+        _drawingOk   = true
+    else
+        -- Stub muet : toutes les proprietes sont ignorees silencieusement
+        DrawingNew = function(_type)
+            local _props = {}
+            return setmetatable({}, {
+                __index    = function(_, k)
+                    if k == "Visible" then return false end
+                    if k == "Remove" or k == "Destroy" then return function() end end
+                    return _props[k]
+                end,
+                __newindex = function(_, k, v) _props[k] = v end,
+            })
+        end
     end
 end
 
@@ -1240,7 +1256,7 @@ RS.Heartbeat:Connect(function()
             d.label.Visible = false
         end
 
-        if S.ESP_HealthBar and active and rootPos then
+        if _drawingOk and S.ESP_HealthBar and active and rootPos then
             local tSP = Cam:WorldToViewportPoint(rootPos + Vector3.new(0,2.8,0))
             local bSP = Cam:WorldToViewportPoint(rootPos + Vector3.new(0,-3,0))
             if tSP.Z > 0 then
@@ -1261,7 +1277,7 @@ RS.Heartbeat:Connect(function()
             d.hbar.bg.Visible=false; d.hbar.bar.Visible=false
         end
 
-        if S.ESP_Traceline and active and rootPos then
+        if _drawingOk and S.ESP_Traceline and active and rootPos then
             local sp = Cam:WorldToViewportPoint(rootPos)
             if sp.Z > 0 then
                 d.tline.From=tcOrigin; d.tline.To=Vector2.new(sp.X,sp.Y); d.tline.Visible=true
@@ -1292,15 +1308,19 @@ end)
 RS.RenderStepped:Connect(function(dt)
     -- FOV Circle
     local mref = isMobile and getCenter() or UIS:GetMouseLocation()
-    FOVC.Visible = S.ShowFOV and S.Aimbot
-    if FOVC.Visible then FOVC.Position=mref; FOVC.Radius=S.FOV end
+    if _drawingOk then
+        FOVC.Visible = S.ShowFOV and S.Aimbot
+        if FOVC.Visible then FOVC.Position=mref; FOVC.Radius=S.FOV end
+    end
 
     -- Cyclone
     cycloneAngle = (cycloneAngle + dt*2.8) % (math.pi*2)
-    if S.AutoBlink and S.BlinkCyclone and blinkDest then
-        updateCyclone(blinkDest)
-    else
-        setCycloneVisible(false)
+    if _drawingOk then
+        if S.AutoBlink and S.BlinkCyclone and blinkDest then
+            updateCyclone(blinkDest)
+        else
+            setCycloneVisible(false)
+        end
     end
 
     -- Rivals Mode : gyro HRP suit la meme cible que l'aimbot
