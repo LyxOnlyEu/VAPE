@@ -40,10 +40,14 @@
 -- ==========================================
 --  LOADER  neverlose-ui
 -- ==========================================
-local Library = loadstring(game:HttpGet(
-    "https://raw.githubusercontent.com/ImInsane-1337/neverlose-ui/refs/heads/main/source/library.lua"
-))()
-if not Library then warn("[VAPE] neverlose-ui failed to load.") return end
+local success, Library = pcall(function()
+    return loadstring(game:HttpGet("https://raw.githubusercontent.com/ImInsane-1337/neverlose-ui/refs/heads/main/source/library.lua"))()
+end)
+
+if not success or not Library then 
+    warn("[VAPE] Library failed to load. Check your internet or the URL.") 
+    return 
+end
 
 Library.Folders = {
     Directory = "VAPE",
@@ -329,7 +333,7 @@ local function updateSkeleton(char,lines,color)
             local okA,spA=pcall(Cam.WorldToViewportPoint,Cam,a.Position)
             local okB,spB=pcall(Cam.WorldToViewportPoint,Cam,b.Position)
             if okA and okB and spA.Z>0 and spB.Z>0 then
-                idx+=1
+                idx = idx + 1
                 if lines[idx] then
                     lines[idx].From=Vector2.new(spA.X,spA.Y)
                     lines[idx].To=Vector2.new(spB.X,spB.Y)
@@ -848,6 +852,29 @@ local _masterEnabled=true
 local function masterActive() return _masterEnabled end
 
 -- ==========================================
+--  FLY  — declared BEFORE GUI so startFly/stopFly
+--  are in scope when the MovLeft:Toggle callback
+--  is registered below.
+-- ==========================================
+local Fly={bv=nil,bg=nil}
+local function stopFly()
+    S.Fly=false
+    if Fly.bv then pcall(function() Fly.bv:Destroy() end); Fly.bv=nil end
+    if Fly.bg then pcall(function() Fly.bg:Destroy() end); Fly.bg=nil end
+    local hum=LP.Character and getHum(LP.Character); if hum then hum.PlatformStand=false end
+end
+local function startFly()
+    local c=LP.Character; local root=c and getHRP(c); local hum=c and getHum(c)
+    if not (root and hum) then return end
+    hum.PlatformStand=true
+    local bv=Instance.new("BodyVelocity"); bv.Name="VapeFlyBV"
+    bv.MaxForce=Vector3.new(1e6,1e6,1e6); bv.Velocity=Vector3.zero; bv.Parent=root; Fly.bv=bv
+    local bg=Instance.new("BodyGyro"); bg.Name="VapeFlyBG"
+    bg.MaxTorque=Vector3.new(1e5,0,1e5); bg.P=1e4; bg.D=500
+    bg.CFrame=CFrame.new(root.Position); bg.Parent=root; Fly.bg=bg
+end
+
+-- ==========================================
 --  GUI WINDOW  (neverlose-ui)
 -- ==========================================
 local Window = Library:Window({
@@ -1021,7 +1048,7 @@ local wlDrop=AimRight:Dropdown({Flag="AimWL", Name="Whitelist (never aim)",
         for _,n in ipairs(list) do
             if n and n~="" and n~="(no players)" then S.AimWhitelist[n]=true end
         end
-        local c=0; for _ in pairs(S.AimWhitelist) do c+=1 end
+        local c=0; for _ in pairs(S.AimWhitelist) do c = c + 1 end
         Notify("Whitelist",c.." player(s) protected",2)
     end})
 AimRight:Button({Name="Refresh Whitelist", Callback=function()
@@ -1122,7 +1149,7 @@ local blinkExclDrop=MovRight:Dropdown({Flag="BlinkExcl", Name="Blink Exclusions"
         for _,n in ipairs(list) do
             if n and n~="" and n~="(no players)" then S.BlinkExclude[n]=true end
         end
-        local c=0; for _ in pairs(S.BlinkExclude) do c+=1 end
+        local c=0; for _ in pairs(S.BlinkExclude) do c = c + 1 end
         Notify("Blink Exclusions",c.." excluded",2)
     end})
 MovRight:Button({Name="Refresh Exclusions", Callback=function()
@@ -1131,25 +1158,6 @@ end})
 MovRight:Button({Name="Clear Exclusions", Callback=function()
     S.BlinkExclude={}; Notify("Exclusions","Cleared",2)
 end})
-
--- Fly table needed before callbacks above reference it
-local Fly={bv=nil,bg=nil}
-local function stopFly()
-    S.Fly=false
-    if Fly.bv then pcall(function() Fly.bv:Destroy() end); Fly.bv=nil end
-    if Fly.bg then pcall(function() Fly.bg:Destroy() end); Fly.bg=nil end
-    local hum=LP.Character and getHum(LP.Character); if hum then hum.PlatformStand=false end
-end
-local function startFly()
-    local c=LP.Character; local root=c and getHRP(c); local hum=c and getHum(c)
-    if not (root and hum) then return end
-    hum.PlatformStand=true
-    local bv=Instance.new("BodyVelocity"); bv.Name="VapeFlyBV"
-    bv.MaxForce=Vector3.new(1e6,1e6,1e6); bv.Velocity=Vector3.zero; bv.Parent=root; Fly.bv=bv
-    local bg=Instance.new("BodyGyro"); bg.Name="VapeFlyBG"
-    bg.MaxTorque=Vector3.new(1e5,0,1e5); bg.P=1e4; bg.D=500
-    bg.CFrame=CFrame.new(root.Position); bg.Parent=root; Fly.bg=bg
-end
 
 -- ===== SETTINGS =====
 Window:Category("Settings")
@@ -1257,7 +1265,7 @@ end)
 -- ==========================================
 Library:Watermark({"VAPE UNIVERSAL", "by LV_SDZ/MODZ", 120959262762131})
 local _fpsCount = 0
-RS.RenderStepped:Connect(function() _fpsCount += 1 end)
+RS.RenderStepped:Connect(function() _fpsCount = _fpsCount + 1 end)
 task.spawn(function()
     while true do
         task.wait(1)
@@ -1338,19 +1346,19 @@ RS.Heartbeat:Connect(function()
     if S.Fly and Fly.bv and hrp then
         if hum then hum.PlatformStand=true end
         local cam=Cam.CFrame; local mv=Vector3.zero
-        if UIS:IsKeyDown(Enum.KeyCode.W)          then mv+=cam.LookVector  end
-        if UIS:IsKeyDown(Enum.KeyCode.S)           then mv-=cam.LookVector  end
-        if UIS:IsKeyDown(Enum.KeyCode.A)           then mv-=cam.RightVector end
-        if UIS:IsKeyDown(Enum.KeyCode.D)           then mv+=cam.RightVector end
-        if UIS:IsKeyDown(Enum.KeyCode.Space)       then mv+=Vector3.new(0,1,0) end
+        if UIS:IsKeyDown(Enum.KeyCode.W)          then mv = mv + cam.LookVector  end
+        if UIS:IsKeyDown(Enum.KeyCode.S)           then mv = mv - cam.LookVector  end
+        if UIS:IsKeyDown(Enum.KeyCode.A)           then mv = mv - cam.RightVector end
+        if UIS:IsKeyDown(Enum.KeyCode.D)           then mv = mv + cam.RightVector end
+        if UIS:IsKeyDown(Enum.KeyCode.Space)       then mv = mv + Vector3.new(0,1,0) end
         if UIS:IsKeyDown(Enum.KeyCode.LeftControl)
-        or UIS:IsKeyDown(Enum.KeyCode.LeftShift)   then mv-=Vector3.new(0,1,0) end
+        or UIS:IsKeyDown(Enum.KeyCode.LeftShift)   then mv = mv - Vector3.new(0,1,0) end
         if isMobile and hum and hum.MoveDirection.Magnitude>0 then
             local md=hum.MoveDirection
-            mv+=cam.LookVector*(-md.Z)+cam.RightVector*md.X
+            mv = mv + cam.LookVector*(-md.Z)+cam.RightVector*md.X
         end
-        if S.FlyUp   then mv+=Vector3.new(0,1,0) end
-        if S.FlyDown then mv-=Vector3.new(0,1,0) end
+        if S.FlyUp   then mv = mv + Vector3.new(0,1,0) end
+        if S.FlyDown then mv = mv - Vector3.new(0,1,0) end
         Fly.bv.Velocity=mv.Magnitude>0 and mv.Unit*S.FlySpeed or Vector3.zero
         Fly.bg.CFrame=CFrame.new(hrp.Position)
     elseif not S.Fly and Fly.bv then stopFly() end
@@ -1420,11 +1428,7 @@ RS.RenderStepped:Connect(function(dt)
         -- GUARD: skip entirely if the model or its root was destroyed.
         -- A destroyed Instance has nil .Parent; reading .Position on it throws
         -- and would abort the entire RenderStepped frame silently.
-        if not model.Parent then
-            -- Clean up the stale entry next defer so we don't modify eESP mid-loop
-            task.defer(removeEntityESP, model)
-            goto continueESP
-        end
+        if model.Parent then
 
         -- Re-read root and hum from the live model every frame so we never
         -- hold a stale reference to a destroyed HRP or Humanoid.
@@ -1501,7 +1505,9 @@ RS.RenderStepped:Connect(function(dt)
             if d.box3d then d.box3d.Visible = S.ESP_Box3D and active end
         end
 
-        ::continueESP::
+        else
+            task.defer(removeEntityESP, model)
+        end -- model.Parent guard
     end
 
     -- Item ESP
