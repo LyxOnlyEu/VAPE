@@ -1,17 +1,13 @@
 --[[
     VAPE internal  |  by LV_SDZ/MODZ
-    ESP: Skeleton / Health Bar / Tracer / Box 2D / Highlight / Item
+    ESP: Skeleton / Health Bar / Tracer / Box 2D / Highlight (optional) / Item
     Combat: Aimbot / Silent Aim / Rivals Mode / Prediction
     Movement: Fly / Speed / Noclip / Inf Jump / Blink / Anti-Void
-    Misc: Anti-AFK / Inf Stamina / Config / Master Toggle
-
-    ARCHITECTURE:
-      All Drawing ESP uses coroutine.wrap(function() local connection; connection = RS.RenderStepped:Connect(...) end)()
-      Exactly matching the standalone working scripts provided.
+    Misc: Fullbright / Instant Interact / Inf Stamina / Anti-AFK / Config
 ]]
 
 -- ==========================================
---  LIBRARY LOADER
+--  LIBRARY
 -- ==========================================
 local success, Library = pcall(function()
     return loadstring(game:HttpGet(
@@ -34,6 +30,7 @@ local UIS       = game:GetService("UserInputService")
 local RS        = game:GetService("RunService")
 local HS        = game:GetService("HttpService")
 local SGui      = game:GetService("StarterGui")
+local Lighting  = game:GetService("Lighting")
 local LP        = Players.LocalPlayer
 local Cam       = workspace.CurrentCamera
 local isMobile  = UIS.TouchEnabled
@@ -49,7 +46,7 @@ local _canWriteFile = type(writefile)=="function" and type(readfile)=="function"
 local CONFIG_PATH   = "vape_internal_config.json"
 
 -- ==========================================
---  NOTIFY  (native, no stuck notifs)
+--  NOTIFY
 -- ==========================================
 local function Notify(title, body, dur)
     task.spawn(function()
@@ -66,6 +63,7 @@ local S = {
     -- ESP
     ESP_Player=false, ESP_NPC=false, ESP_Item=false,
     ESP_ShowDist=true, ESP_MaxDist=500,
+    ESP_Highlight_P=false, ESP_Highlight_N=false,
     ESP_HealthBar_P=false, ESP_HealthBar_N=false,
     ESP_Traceline_P=false, ESP_Traceline_N=false,
     ESP_Skeleton_P=false,  ESP_Skeleton_N=false,
@@ -87,26 +85,30 @@ local S = {
     Speed=false, SpeedVal=24,
     InfJump=false, Noclip=false,
     Fly=false, FlySpeed=70, FlyUp=false, FlyDown=false,
-    AutoBlink=false, BlinkInterval=3, BlinkDist=8, BlinkCyclone=true,
+    AutoBlink=false, BlinkInterval=3, BlinkDist=8,
     BlinkExclude={},
     AntiAFK=false,
     AntiVoid=false, AntiVoidY=-200, AntiVoidTP=Vector3.new(0,100,0),
+    -- Misc
+    InfStamina=false,
+    Fullbright=false,
+    InstantInteract=false,
     -- Theme
     ThemeAccent=Color3.fromRGB(0,200,120),
 }
 
 -- ==========================================
---  CONFIG SAVE / LOAD
+--  CONFIG
 -- ==========================================
 local SAVE_KEYS = {
     "ESP_ShowDist","ESP_MaxDist",
+    "ESP_Highlight_P","ESP_Highlight_N",
     "ESP_HealthBar_P","ESP_HealthBar_N","ESP_Traceline_P","ESP_Traceline_N",
     "ESP_Skeleton_P","ESP_Skeleton_N","ESP_Box2D_P","ESP_Box2D_N",
     "AimPart","AimSmooth","FOV","ShowFOV",
     "AimPredict","PredictMult","AimHumanize","HumanizeStr",
     "SilentAim","SpeedVal","FlySpeed",
-    "BlinkInterval","BlinkDist","BlinkCyclone",
-    "AntiAFK","AntiVoidY",
+    "BlinkInterval","BlinkDist","AntiAFK","AntiVoidY",
 }
 local function c3T(c) return {r=math.floor(c.R*255),g=math.floor(c.G*255),b=math.floor(c.B*255)} end
 local function tC3(t) return Color3.fromRGB(t.r or 128,t.g or 128,t.b or 128) end
@@ -114,7 +116,9 @@ local function buildSave()
     local t={}
     for _,k in ipairs(SAVE_KEYS) do local v=S[k]; if type(v)~="table" and v~=nil then t[k]=v end end
     t._CP=c3T(S.C_PLAYER); t._CN=c3T(S.C_NPC); t._CI=c3T(S.C_ITEM); t._TH=c3T(S.ThemeAccent)
-    local wl,bl={},{} for k in pairs(S.AimWhitelist) do wl[#wl+1]=k end for k in pairs(S.BlinkExclude) do bl[#bl+1]=k end
+    local wl,bl={},{}
+    for k in pairs(S.AimWhitelist) do wl[#wl+1]=k end
+    for k in pairs(S.BlinkExclude)  do bl[#bl+1]=k end
     t._wl=wl; t._bl=bl; return t
 end
 local function applyLoad(t)
@@ -127,16 +131,22 @@ local function applyLoad(t)
 end
 local function minEnc(v)
     local ty=type(v)
-    if ty=="boolean" then return v and "true" or "false" elseif ty=="number" then return tostring(v)
+    if ty=="boolean" then return v and "true" or "false"
+    elseif ty=="number" then return tostring(v)
     elseif ty=="string" then return '"'..v:gsub('\\','\\\\'):gsub('"','\\"')..'"'
     elseif ty=="table" then
-        if #v>0 then local p={} for _,x in ipairs(v) do p[#p+1]=minEnc(x) end return "["..table.concat(p,",").."]"
-        else local p={} for k,x in pairs(v) do p[#p+1]='"'..tostring(k)..'":'..minEnc(x) end return "{"..table.concat(p,",").."}" end
-    end return "null"
+        if #v>0 then
+            local p={}; for _,x in ipairs(v) do p[#p+1]=minEnc(x) end; return "["..table.concat(p,",").."]"
+        else
+            local p={}; for k,x in pairs(v) do p[#p+1]='"'..tostring(k)..'":'..minEnc(x) end
+            return "{"..table.concat(p,",").."}"
+        end
+    end; return "null"
 end
 local function saveConfig()
     if not _canWriteFile then Notify("Config","writefile unavailable",2); return end
-    local t=buildSave(); local ok2,res=pcall(function() return HS:JSONEncode(t) end)
+    local t=buildSave()
+    local ok2,res=pcall(function() return HS:JSONEncode(t) end)
     local json=(ok2 and res) or minEnc(t)
     local ok,err=pcall(writefile,CONFIG_PATH,json)
     if ok then Notify("Config","Saved!",2) else Notify("Config","Error: "..tostring(err),3) end
@@ -163,24 +173,31 @@ local function getHRP(char)
     local h=char:FindFirstChildOfClass("Humanoid"); if h and h.RootPart then return h.RootPart end
     return char:FindFirstChildWhichIsA("BasePart")
 end
-local function getHum(char) return char and char:FindFirstChildOfClass("Humanoid") end
+local function getHum(char)  return char and char:FindFirstChildOfClass("Humanoid") end
 local function getHead(char)
     if not char then return nil end
-    return char:FindFirstChild("Head") or char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso") or char:FindFirstChildWhichIsA("BasePart")
+    return char:FindFirstChild("Head") or char:FindFirstChild("UpperTorso")
+        or char:FindFirstChild("Torso") or char:FindFirstChildWhichIsA("BasePart")
 end
 local function isAlive(char) local h=char and char:FindFirstChildOfClass("Humanoid"); return h and h.Health>0 end
-local function isSafePos(pos)
-    local rp=RaycastParams.new(); rp.FilterDescendantsInstances=LP.Character and {LP.Character} or {}; rp.FilterType=Enum.RaycastFilterType.Exclude
-    local ok,res=pcall(workspace.Raycast,workspace,pos+Vector3.new(0,3,0),Vector3.new(0,-60,0),rp)
-    if ok and res and res.Position.Y>-500 then return true,res.Position end; return false,nil
-end
-local function makeLabel(parent,col)
+local function makeLabel(parent, col)
     local bb=Instance.new("BillboardGui"); bb.Name="Vape_BB"; bb.AlwaysOnTop=true
     bb.MaxDistance=0; bb.Size=UDim2.new(0,165,0,26); bb.StudsOffset=Vector3.new(0,3.6,0); bb.Parent=parent
     local lbl=Instance.new("TextLabel",bb); lbl.Size=UDim2.new(1,0,1,0); lbl.BackgroundTransparency=1
     lbl.TextColor3=col; lbl.Font=Enum.Font.GothamSemibold; lbl.TextSize=13
     lbl.TextXAlignment=Enum.TextXAlignment.Center; lbl.TextStrokeTransparency=0.15
     lbl.TextStrokeColor3=Color3.new(0,0,0); lbl.Visible=false; return lbl
+end
+
+-- Cached RaycastParams for blink
+local _rayParams = RaycastParams.new()
+_rayParams.FilterType = Enum.RaycastFilterType.Exclude
+if LP.Character then _rayParams.FilterDescendantsInstances={LP.Character} end
+LP.CharacterAdded:Connect(function(c) _rayParams.FilterDescendantsInstances={c} end)
+local function isSafePos(pos)
+    local ok,res=pcall(workspace.Raycast,workspace,pos+Vector3.new(0,3,0),Vector3.new(0,-60,0),_rayParams)
+    if ok and res and res.Position.Y>-500 then return true,res.Position end
+    return false,nil
 end
 
 -- ==========================================
@@ -190,31 +207,23 @@ local _masterEnabled = true
 local function masterActive() return _masterEnabled end
 
 -- ==========================================
---  FOV CIRCLE  — exact pattern from working code
+--  FOV CIRCLE
 -- ==========================================
 local FOVC = Drawing.new("Circle")
-FOVC.Visible      = false
-FOVC.Thickness    = 2
-FOVC.NumSides     = 64
-FOVC.Radius       = S.FOV
-FOVC.Color        = S.ThemeAccent
-FOVC.Transparency = 0.7
-FOVC.Filled       = false
+FOVC.Visible=false; FOVC.Thickness=2; FOVC.NumSides=64
+FOVC.Radius=S.FOV; FOVC.Color=S.ThemeAccent; FOVC.Transparency=0.7; FOVC.Filled=false
 
 RS.RenderStepped:Connect(function()
     if S.ShowFOV and S.Aimbot and masterActive() then
-        local mouse = UIS:GetMouseLocation()
-        FOVC.Position    = Vector2.new(mouse.X, mouse.Y)
-        FOVC.Radius      = S.FOV
-        FOVC.Color       = S.ThemeAccent
-        FOVC.Visible     = true
+        local m=UIS:GetMouseLocation()
+        FOVC.Position=Vector2.new(m.X,m.Y); FOVC.Radius=S.FOV; FOVC.Color=S.ThemeAccent; FOVC.Visible=true
     else
-        FOVC.Visible = false
+        FOVC.Visible=false
     end
 end)
 
 -- ==========================================
---  BONE TABLES  (Skeleton)
+--  BONE TABLES
 -- ==========================================
 local R15_BONES = {
     {"Head","UpperTorso"},{"UpperTorso","LowerTorso"},
@@ -228,8 +237,71 @@ local R6_BONES = {
     {"Torso","Left Leg"},{"Torso","Right Leg"},
 }
 
+-- Pre-built constant Vector3 offsets (avoid allocations per frame)
+local V3_UP3  = Vector3.new(0,  3,   0)
+local V3_DN3  = Vector3.new(0, -3,   0)
+local V3_UP26 = Vector3.new(0,  2.6, 0)
+local V3_DN35 = Vector3.new(0, -3.5, 0)
+local V2_ZERO = Vector2.new(0, 0)
+
+-- Shared per-frame cache: one RenderStepped updates, all entities read
+local _myPos = nil
+local _vpCX  = 0
+local _vpCY  = 0
+RS.RenderStepped:Connect(function()
+    local c=LP.Character
+    local h=c and c:FindFirstChild("HumanoidRootPart")
+    _myPos = h and h.Position
+    local vp=Cam.ViewportSize; _vpCX=vp.X*0.5; _vpCY=vp.Y*0.5
+end)
+
 -- ==========================================
---  ITEM ESP  (Highlight-based, no Drawing)
+--  FULLBRIGHT
+-- ==========================================
+local _origL = {}
+local function saveLighting()
+    _origL = {
+        Brightness=Lighting.Brightness, ClockTime=Lighting.ClockTime,
+        FogEnd=Lighting.FogEnd, FogStart=Lighting.FogStart,
+        GlobalShadows=Lighting.GlobalShadows,
+        Ambient=Lighting.Ambient, OutdoorAmbient=Lighting.OutdoorAmbient,
+    }
+end
+local function applyFullbright()
+    Lighting.Brightness=2; Lighting.ClockTime=14
+    Lighting.FogEnd=100000; Lighting.FogStart=100000
+    Lighting.GlobalShadows=false
+    Lighting.Ambient=Color3.new(1,1,1); Lighting.OutdoorAmbient=Color3.new(1,1,1)
+end
+local function restoreLighting()
+    if not _origL.Ambient then return end
+    Lighting.Brightness=_origL.Brightness; Lighting.ClockTime=_origL.ClockTime
+    Lighting.FogEnd=_origL.FogEnd; Lighting.FogStart=_origL.FogStart
+    Lighting.GlobalShadows=_origL.GlobalShadows
+    Lighting.Ambient=_origL.Ambient; Lighting.OutdoorAmbient=_origL.OutdoorAmbient
+end
+saveLighting()
+
+-- ==========================================
+--  INSTANT INTERACT (ProximityPrompt hack)
+-- ==========================================
+local _hackedPrompts = setmetatable({},{__mode="k"})
+local function hackPrompt(pp)
+    if _hackedPrompts[pp] then return end
+    _hackedPrompts[pp]=true
+    pcall(function() pp.MaxActivationDistance=50; pp.HoldDuration=0 end)
+end
+local function scanAndHackPrompts()
+    for _,v in ipairs(workspace:GetDescendants()) do
+        if v:IsA("ProximityPrompt") then hackPrompt(v) end
+    end
+end
+workspace.DescendantAdded:Connect(function(v)
+    if v:IsA("ProximityPrompt") and S.InstantInteract then hackPrompt(v) end
+end)
+
+-- ==========================================
+--  ITEM ESP
 -- ==========================================
 local iESP = {}
 local KW_SET={}
@@ -274,19 +346,17 @@ local function applyItemESP(obj)
     iESP[obj]={hl=hl,lbl=lbl,root=root}
     obj.AncestryChanged:Connect(function()
         if obj:IsDescendantOf(workspace) then return end
-        local d=iESP[obj]; if d then pcall(function() d.hl:Destroy() end); pcall(function() local bb=d.lbl and d.lbl.Parent; if bb then bb:Destroy() end end) end
+        local d2=iESP[obj]
+        if d2 then pcall(function() d2.hl:Destroy() end); pcall(function() local bb=d2.lbl and d2.lbl.Parent; if bb then bb:Destroy() end end) end
         iESP[obj]=nil
     end)
 end
 local function scanItems() for _,o in ipairs(workspace:GetDescendants()) do pcall(applyItemESP,o) end end
 workspace.DescendantAdded:Connect(function(o) task.defer(applyItemESP,o) end)
 
--- Item ESP update — Heartbeat (items need no per-frame precision)
--- IMPROVEMENT 4: was RenderStepped, now Heartbeat = ~60x/s same but lower priority
 RS.Heartbeat:Connect(function()
     if not masterActive() then return end
-    local myHRP = LP.Character and getHRP(LP.Character)
-    if not myHRP then return end
+    local myHRP=LP.Character and getHRP(LP.Character); if not myHRP then return end
     for obj,d in pairs(iESP) do
         if not obj.Parent then
             pcall(function() d.hl:Destroy() end)
@@ -303,87 +373,88 @@ RS.Heartbeat:Connect(function()
 end)
 
 -- ==========================================
---  ENTITY ESP  — per-entity coroutine pattern
---  Exact architecture from working standalone scripts
+--  ENTITY ESP
 -- ==========================================
-local eESP = {}  -- model -> {hl, lbl, conn, skel, bgBar, fillBar, tracerLine, box2d, boxOutline}
+local eESP = {}
 
--- IMPROVEMENT: killESP properly removes ALL Drawing objects (no memory leak)
 local function killESP(model)
-    local d = eESP[model]; if not d then return end
+    local d=eESP[model]; if not d then return end
     pcall(function() d.conn:Disconnect() end)
     pcall(function() d.hl:Destroy() end)
-    pcall(function() local bb = d.lbl and d.lbl.Parent; if bb then bb:Destroy() end end)
+    pcall(function() local bb=d.lbl and d.lbl.Parent; if bb then bb:Destroy() end end)
     if d.skel then for _,l in ipairs(d.skel) do pcall(function() l:Remove() end) end end
-    pcall(function() d.bgBar:Remove() end)
-    pcall(function() d.fillBar:Remove() end)
+    pcall(function() d.bgBar:Remove() end); pcall(function() d.fillBar:Remove() end)
     pcall(function() d.tracerLine:Remove() end)
-    pcall(function() d.box2d:Remove() end)
-    pcall(function() d.boxOutline:Remove() end)
-    eESP[model] = nil
+    pcall(function() d.box2d:Remove() end); pcall(function() d.boxOutline:Remove() end)
+    eESP[model]=nil
 end
 
 local function applyEntityESP(model)
     if eESP[model] then return end
     if not model or not model.Parent then return end
-    if model == LP.Character or Players:GetPlayerFromCharacter(model) == LP then return end
-    local hum  = getHum(model);  if not hum  then return end
-    local head = getHead(model); if not head then return end
-    local plr  = Players:GetPlayerFromCharacter(model)
-    local isP  = plr ~= nil
-    local col  = isP and S.C_PLAYER or S.C_NPC
-    local name = plr and plr.Name or model.Name
+    if model==LP.Character or Players:GetPlayerFromCharacter(model)==LP then return end
+    local hum=getHum(model);  if not hum  then return end
+    local head=getHead(model); if not head then return end
+    local plr=Players:GetPlayerFromCharacter(model)
+    local isP=plr~=nil
+    local col=isP and S.C_PLAYER or S.C_NPC
+    local name=plr and plr.Name or model.Name
 
-    local hl = Instance.new("Highlight")
+    -- Highlight: optional, controlled by ESP_Highlight_P/N
+    local hl=Instance.new("Highlight")
     hl.FillColor=col; hl.OutlineColor=col; hl.FillTransparency=0.72; hl.OutlineTransparency=0.1
     hl.DepthMode=Enum.HighlightDepthMode.AlwaysOnTop; hl.Adornee=model
-    hl.Enabled = (isP and S.ESP_Player) or (not isP and S.ESP_NPC)
+    hl.Enabled=(isP and S.ESP_Highlight_P) or (not isP and S.ESP_Highlight_N)
     safeParent(hl)
 
-    local lbl = makeLabel(head, col)
-    lbl.Text = name; lbl.Visible = hl.Enabled
+    local lbl=makeLabel(head,col)
+    lbl.Text=name; lbl.Visible=(isP and S.ESP_Player) or (not isP and S.ESP_NPC)
 
-    -- Create all Drawing objects up front, stored in d for proper cleanup
-    local skelLines = {}
-    for i = 1, #R15_BONES do
-        local l = Drawing.new("Line")
-        l.Thickness=2; l.Color=col; l.Transparency=1; l.Visible=false
-        skelLines[i] = l
+    -- Cache skeleton parts at spawn (avoids FindFirstChild every frame)
+    local char=model
+    local isR6=char:FindFirstChild("Torso") and not char:FindFirstChild("UpperTorso")
+    local bones=isR6 and R6_BONES or R15_BONES
+    local cachedParts={}
+    for i,pair in ipairs(bones) do
+        local p1=char:FindFirstChild(pair[1]); local p2=char:FindFirstChild(pair[2])
+        cachedParts[i]=(p1 and p2) and {p1,p2} or nil
     end
-    local bgBar = Drawing.new("Square")
+    local _partRefreshT=0
+
+    -- Drawing objects
+    local skelLines={}
+    for i=1,#R15_BONES do
+        local l=Drawing.new("Line"); l.Thickness=2; l.Color=col; l.Transparency=1; l.Visible=false
+        skelLines[i]=l
+    end
+    local bgBar=Drawing.new("Square")
     bgBar.Color=Color3.fromRGB(0,0,0); bgBar.Filled=true; bgBar.Thickness=1; bgBar.Transparency=0.6; bgBar.Visible=false
-    local fillBar = Drawing.new("Square")
+    local fillBar=Drawing.new("Square")
     fillBar.Color=Color3.fromRGB(0,255,0); fillBar.Filled=true; fillBar.Thickness=1; fillBar.Visible=false
-    local tracerLine = Drawing.new("Line")
+    local tracerLine=Drawing.new("Line")
     tracerLine.Thickness=1; tracerLine.Color=col; tracerLine.Transparency=0.6; tracerLine.Visible=false
-    local boxOutline = Drawing.new("Square")
+    local boxOutline=Drawing.new("Square")
     boxOutline.Color=Color3.fromRGB(0,0,0); boxOutline.Thickness=3; boxOutline.Filled=false; boxOutline.Transparency=1; boxOutline.Visible=false
-    local box2d = Drawing.new("Square")
+    local box2d=Drawing.new("Square")
     box2d.Color=col; box2d.Thickness=1; box2d.Filled=false; box2d.Transparency=1; box2d.Visible=false
 
-    -- IMPROVEMENT: label throttle — only rebuild string when dist or hp actually changed
-    local _lastDist = -1
-    local _lastHPi  = -1
+    local _lastDist=-1; local _lastHPi=-1
 
-    local d = {
+    local d={
         hl=hl, lbl=lbl, conn=nil, isPlayer=isP, col=col,
         skel=skelLines, bgBar=bgBar, fillBar=fillBar,
         tracerLine=tracerLine, box2d=box2d, boxOutline=boxOutline,
     }
-    eESP[model] = d
+    eESP[model]=d
 
-    -- IMPROVEMENT: ONE coroutine, ONE RenderStepped connection per entity (was 5)
-    -- Single WorldToViewportPoint(hrpPos) shared by tracer, hbar, box
     coroutine.wrap(function()
         local connection
-        connection = RS.RenderStepped:Connect(function()
+        connection=RS.RenderStepped:Connect(function()
             if not model.Parent then
                 for _,l in ipairs(skelLines) do l.Visible=false end
                 bgBar.Visible=false; fillBar.Visible=false
                 tracerLine.Visible=false; box2d.Visible=false; boxOutline.Visible=false
-                connection:Disconnect()
-                task.defer(killESP, model)
-                return
+                connection:Disconnect(); task.defer(killESP,model); return
             end
 
             if not masterActive() then
@@ -394,68 +465,64 @@ local function applyEntityESP(model)
                 return
             end
 
-            local char = model
-            local hrp  = char:FindFirstChild("HumanoidRootPart")
-            local hum2 = char:FindFirstChildOfClass("Humanoid")
+            local hrp=char:FindFirstChild("HumanoidRootPart")
+            local hum2=char:FindFirstChildOfClass("Humanoid")
             if not hrp then
                 for _,l in ipairs(skelLines) do l.Visible=false end
                 bgBar.Visible=false; fillBar.Visible=false
                 tracerLine.Visible=false; box2d.Visible=false; boxOutline.Visible=false
-                hl.Enabled=false; lbl.Visible=false
-                return
+                hl.Enabled=false; lbl.Visible=false; return
             end
 
-            -- Compute once per frame, shared across all features
-            local myHRP  = LP.Character and getHRP(LP.Character)
-            local myPos  = myHRP and myHRP.Position
-            local hrpPos = hrp.Position
-            local dist   = myPos and math.floor((myPos - hrpPos).Magnitude) or 0
-            local inRange = dist <= S.ESP_MaxDist
-            local active  = inRange and ((isP and S.ESP_Player) or (not isP and S.ESP_NPC))
+            local myPos=_myPos
+            local hrpPos=hrp.Position
+            local dist=myPos and math.floor((myPos-hrpPos).Magnitude) or 0
+            local inRange=dist<=S.ESP_MaxDist
+            local active=inRange and ((isP and S.ESP_Player) or (not isP and S.ESP_NPC))
 
-            hl.Enabled  = active
-            lbl.Visible = active
+            -- Highlight is independent from the name/dist toggle
+            hl.Enabled=inRange and ((isP and S.ESP_Highlight_P) or (not isP and S.ESP_Highlight_N))
+            lbl.Visible=active
 
-            -- Label text: only rebuild string when values changed
             if active then
-                local hp2   = hum2 and math.floor(hum2.Health)   or 100
-                local hmax2 = hum2 and math.floor(hum2.MaxHealth) or 100
-                if dist ~= _lastDist or hp2 ~= _lastHPi then
-                    _lastDist = dist; _lastHPi = hp2
-                    lbl.Text = S.ESP_ShowDist
-                        and string.format("%s [%dm] %d/%d", name, dist, hp2, hmax2)
-                        or  string.format("%s %d/%d", name, hp2, hmax2)
+                local hp2=hum2 and math.floor(hum2.Health) or 100
+                local hmax2=hum2 and math.floor(hum2.MaxHealth) or 100
+                if dist~=_lastDist or hp2~=_lastHPi then
+                    _lastDist=dist; _lastHPi=hp2
+                    lbl.Text=S.ESP_ShowDist
+                        and string.format("%s [%dm] %d/%d",name,dist,hp2,hmax2)
+                        or  string.format("%s %d/%d",name,hp2,hmax2)
                 end
             end
 
-            -- Single projection shared by tracer, hbar, box2d
-            local sp, onScreen = Cam:WorldToViewportPoint(hrpPos)
+            -- Single HRP projection shared by tracer, hbar, box
+            local sp,onScreen=Cam:WorldToViewportPoint(hrpPos)
 
             -- ── TRACER ──
-            local doT = active and ((isP and S.ESP_Traceline_P) or (not isP and S.ESP_Traceline_N))
-            if doT and onScreen then
-                tracerLine.From    = Vector2.new(Cam.ViewportSize.X/2, Cam.ViewportSize.Y/2)
-                tracerLine.To      = Vector2.new(sp.X, sp.Y)
-                tracerLine.Color   = isP and S.C_PLAYER or S.C_NPC
-                tracerLine.Visible = true
+            if active and onScreen and ((isP and S.ESP_Traceline_P) or (not isP and S.ESP_Traceline_N)) then
+                tracerLine.From=Vector2.new(_vpCX,_vpCY); tracerLine.To=Vector2.new(sp.X,sp.Y)
+                tracerLine.Color=isP and S.C_PLAYER or S.C_NPC; tracerLine.Visible=true
             else
-                tracerLine.Visible = false
+                tracerLine.Visible=false
             end
 
             -- ── HEALTH BAR ──
-            local doHB = active and ((isP and S.ESP_HealthBar_P) or (not isP and S.ESP_HealthBar_N))
-            if doHB and onScreen then
-                local rawSize = Cam:WorldToViewportPoint(hrpPos - Vector3.new(0,3,0)).Y
-                              - Cam:WorldToViewportPoint(hrpPos + Vector3.new(0,2.6,0)).Y
-                local size = math.abs(rawSize)
-                if size >= 4 then
-                    local xPos  = sp.X - (size/1.5/1.6) - 6
-                    local ratio = hum2 and math.clamp(hum2.Health/hum2.MaxHealth, 0, 1) or 1
-                    bgBar.Size=Vector2.new(4,size); bgBar.Position=Vector2.new(xPos,sp.Y-size/2); bgBar.Visible=true
+            -- hrpPos + V3_DN3 = 3 studs BELOW hrp = feet = larger screen Y
+            -- hrpPos + V3_UP26 = 2.6 studs ABOVE hrp = head = smaller screen Y
+            -- size = abs(botSP.Y - topSP.Y) = positive height in pixels
+            if active and onScreen and ((isP and S.ESP_HealthBar_P) or (not isP and S.ESP_HealthBar_N)) then
+                local botSP=Cam:WorldToViewportPoint(hrpPos+V3_DN3)
+                local topSP=Cam:WorldToViewportPoint(hrpPos+V3_UP26)
+                local size=math.abs(botSP.Y-topSP.Y)
+                if size>=4 then
+                    local xPos=sp.X-size*0.417-6
+                    local ratio=hum2 and math.clamp(hum2.Health/hum2.MaxHealth,0,1) or 1
+                    local yTop=math.min(botSP.Y,topSP.Y)
+                    bgBar.Size=Vector2.new(4,size); bgBar.Position=Vector2.new(xPos,yTop); bgBar.Visible=true
                     fillBar.Size=Vector2.new(2,size*ratio)
-                    fillBar.Position=Vector2.new(xPos+1,(sp.Y-size/2)+size*(1-ratio))
-                    fillBar.Color=Color3.fromRGB(math.floor(255*(1-ratio)), math.floor(255*ratio), 0)
-                    fillBar.Visible = (ratio > 0.01)
+                    fillBar.Position=Vector2.new(xPos+1,yTop+size*(1-ratio))
+                    fillBar.Color=Color3.fromRGB(math.floor(255*(1-ratio)),math.floor(255*ratio),0)
+                    fillBar.Visible=ratio>0.01
                 else
                     bgBar.Visible=false; fillBar.Visible=false
                 end
@@ -464,13 +531,12 @@ local function applyEntityESP(model)
             end
 
             -- ── BOX 2D ──
-            local doB = active and ((isP and S.ESP_Box2D_P) or (not isP and S.ESP_Box2D_N))
-            if doB and onScreen then
-                local headSP = Cam:WorldToViewportPoint(hrpPos + Vector3.new(0,3,0))
-                local legSP  = Cam:WorldToViewportPoint(hrpPos - Vector3.new(0,3.5,0))
-                local height = math.abs(headSP.Y - legSP.Y)
-                local width  = height / 1.5
-                box2d.Size=Vector2.new(width,height); box2d.Position=Vector2.new(sp.X-width/2,sp.Y-height/2)
+            if active and onScreen and ((isP and S.ESP_Box2D_P) or (not isP and S.ESP_Box2D_N)) then
+                local headSP=Cam:WorldToViewportPoint(hrpPos+V3_UP3)
+                local legSP=Cam:WorldToViewportPoint(hrpPos+V3_DN35)
+                local height=math.abs(headSP.Y-legSP.Y)
+                local width=height*0.667
+                box2d.Size=Vector2.new(width,height); box2d.Position=Vector2.new(sp.X-width*0.5,sp.Y-height*0.5)
                 box2d.Color=isP and S.C_PLAYER or S.C_NPC; box2d.Visible=true
                 boxOutline.Size=box2d.Size; boxOutline.Position=box2d.Position; boxOutline.Visible=true
             else
@@ -478,32 +544,35 @@ local function applyEntityESP(model)
             end
 
             -- ── SKELETON ──
-            local doSkel = active and ((isP and S.ESP_Skeleton_P) or (not isP and S.ESP_Skeleton_N))
-            if doSkel then
-                local isR6 = char:FindFirstChild("Torso") and not char:FindFirstChild("UpperTorso")
-                local bones = isR6 and R6_BONES or R15_BONES
-                for i, pair in ipairs(bones) do
-                    local p1 = char:FindFirstChild(pair[1])
-                    local p2 = char:FindFirstChild(pair[2])
-                    if p1 and p2 then
-                        local sp1, on1 = Cam:WorldToViewportPoint(p1.Position)
-                        local sp2, on2 = Cam:WorldToViewportPoint(p2.Position)
+            if active and ((isP and S.ESP_Skeleton_P) or (not isP and S.ESP_Skeleton_N)) then
+                local now=os.clock()
+                if now-_partRefreshT>3 then
+                    _partRefreshT=now
+                    for i,pair in ipairs(bones) do
+                        local p1=char:FindFirstChild(pair[1]); local p2=char:FindFirstChild(pair[2])
+                        cachedParts[i]=(p1 and p2) and {p1,p2} or nil
+                    end
+                end
+                for i,parts in ipairs(cachedParts) do
+                    if parts then
+                        local sp1,on1=Cam:WorldToViewportPoint(parts[1].Position)
+                        local sp2,on2=Cam:WorldToViewportPoint(parts[2].Position)
                         if on1 and on2 then
                             skelLines[i].From=Vector2.new(sp1.X,sp1.Y); skelLines[i].To=Vector2.new(sp2.X,sp2.Y)
                             skelLines[i].Color=isP and S.C_PLAYER or S.C_NPC; skelLines[i].Visible=true
                         else
-                            skelLines[i].From=Vector2.new(0,0); skelLines[i].To=Vector2.new(0,0); skelLines[i].Visible=false
+                            skelLines[i].From=V2_ZERO; skelLines[i].To=V2_ZERO; skelLines[i].Visible=false
                         end
                     else
                         skelLines[i].Visible=false
                     end
                 end
-                for i=#(isR6 and R6_BONES or R15_BONES)+1,#skelLines do skelLines[i].Visible=false end
+                for i=#bones+1,#skelLines do skelLines[i].Visible=false end
             else
                 for _,l in ipairs(skelLines) do l.Visible=false end
             end
         end)
-        d.conn = connection
+        d.conn=connection
     end)()
 
     model.AncestryChanged:Connect(function()
@@ -511,29 +580,22 @@ local function applyEntityESP(model)
     end)
 end
 
-
--- Hook players
 local function hookPlayer(p)
     if p==LP then return end
     p.CharacterAdded:Connect(function(c)
         if c:WaitForChild("HumanoidRootPart",5) then task.wait(0.12); applyEntityESP(c) end
     end)
-    if p.Character then task.defer(applyEntityESP, p.Character) end
+    if p.Character then task.defer(applyEntityESP,p.Character) end
 end
 Players.PlayerAdded:Connect(hookPlayer)
 for _,p in ipairs(Players:GetPlayers()) do hookPlayer(p) end
 workspace.DescendantAdded:Connect(function(o)
     if o:IsA("Model") and not Players:GetPlayerFromCharacter(o) then task.defer(applyEntityESP,o) end
 end)
-
--- Polling every 2s
 task.spawn(function()
-    while true do task.wait(2)
+    while true do task.wait(3)
         for _,p in ipairs(Players:GetPlayers()) do
             if p~=LP and p.Character and not eESP[p.Character] then pcall(applyEntityESP,p.Character) end
-        end
-        for _,o in ipairs(workspace:GetDescendants()) do
-            if o:IsA("Model") and not Players:GetPlayerFromCharacter(o) and not eESP[o] then pcall(applyEntityESP,o) end
         end
     end
 end)
@@ -541,7 +603,7 @@ end)
 -- ==========================================
 --  AIMBOT
 -- ==========================================
-local _camManipOk = nil
+local _camManipOk=nil
 local function trySetCam(cf)
     if _camManipOk==nil then _camManipOk=pcall(function() Cam.CFrame=Cam.CFrame end) end
     if _camManipOk then local ok=pcall(function() Cam.CFrame=cf end); if not ok then _camManipOk=false end end
@@ -559,19 +621,19 @@ local function predictPos(part)
     if not S.AimPredict then return part.Position end
     local ok,vel=pcall(function() return part.AssemblyLinearVelocity end)
     if not ok or not vel then return part.Position end
-    return part.Position + vel*S.PredictMult
+    return part.Position+vel*S.PredictMult
 end
 local function getBestTarget()
-    local ref = isMobile and Vector2.new(Cam.ViewportSize.X/2,Cam.ViewportSize.Y/2) or UIS:GetMouseLocation()
-    local best, bestDist = nil, S.FOV
+    local ref=isMobile and Vector2.new(_vpCX,_vpCY) or UIS:GetMouseLocation()
+    local best,bestDist=nil,S.FOV
     for _,p in ipairs(Players:GetPlayers()) do
         if p~=LP and not S.AimWhitelist[p.Name] and p.Character and isAlive(p.Character) then
-            local part = findAimPart(p.Character)
+            local part=findAimPart(p.Character)
             if part then
-                local sp, onScreen = Cam:WorldToViewportPoint(predictPos(part))
+                local sp,onScreen=Cam:WorldToViewportPoint(predictPos(part))
                 if onScreen and sp.Z>0 then
-                    local dist = (Vector2.new(sp.X,sp.Y)-ref).Magnitude
-                    if dist < bestDist then best=part; bestDist=dist end
+                    local dist=(Vector2.new(sp.X,sp.Y)-ref).Magnitude
+                    if dist<bestDist then best=part; bestDist=dist end
                 end
             end
         end
@@ -581,7 +643,7 @@ local function getBestTarget()
             if not d.isPlayer and isAlive(model) then
                 local hrp2=getHRP(model)
                 if hrp2 then
-                    local sp, onScreen = Cam:WorldToViewportPoint(predictPos(hrp2))
+                    local sp,onScreen=Cam:WorldToViewportPoint(predictPos(hrp2))
                     if onScreen and sp.Z>0 then
                         local dist=(Vector2.new(sp.X,sp.Y)-ref).Magnitude
                         if dist<bestDist then best=hrp2; bestDist=dist end
@@ -599,16 +661,15 @@ local function aimAt(targetPos,smooth,silent)
         local j=S.HumanizeStr
         dir=dir+Vector3.new((math.random()-0.5)*j,(math.random()-0.5)*j,(math.random()-0.5)*j)
     end
-    local targetCF=CFrame.new(camPos,camPos+dir.Unit)
-    if silent then trySetCam(targetCF)
-    elseif smooth and smooth<1 then trySetCam(Cam.CFrame:Lerp(targetCF,smooth))
-    else trySetCam(targetCF) end
+    local tCF=CFrame.new(camPos,camPos+dir.Unit)
+    if silent then trySetCam(tCF)
+    elseif smooth and smooth<1 then trySetCam(Cam.CFrame:Lerp(tCF,smooth))
+    else trySetCam(tCF) end
 end
 
--- Aimbot loop
 RS.RenderStepped:Connect(function()
     if not masterActive() or not S.Aimbot then return end
-    local triggered = false
+    local triggered=false
     if     isMobile      then triggered=#UIS:GetTouches()>=1
     elseif S.AimGamepad  then triggered=UIS:IsGamepadButtonDown(Enum.UserInputType.Gamepad1,Enum.KeyCode.ButtonL2)
     elseif S.AimKeyCode  then triggered=UIS:IsKeyDown(S.AimKeyCode)
@@ -625,8 +686,8 @@ end)
 -- ==========================================
 local function startRivalsGyro()
     local hrp=LP.Character and getHRP(LP.Character); if not hrp or S._rivalsGyro then return end
-    local bg=Instance.new("BodyGyro"); bg.Name="VapeRivalsGyro"; bg.MaxTorque=Vector3.new(0,1e6,0); bg.P=8e4; bg.D=600
-    bg.CFrame=hrp.CFrame; bg.Parent=hrp; S._rivalsGyro=bg
+    local bg=Instance.new("BodyGyro"); bg.Name="VapeRivalsGyro"
+    bg.MaxTorque=Vector3.new(0,1e6,0); bg.P=8e4; bg.D=600; bg.CFrame=hrp.CFrame; bg.Parent=hrp; S._rivalsGyro=bg
 end
 local function stopRivalsGyro()
     if S._rivalsGyro then pcall(function() S._rivalsGyro:Destroy() end); S._rivalsGyro=nil end
@@ -638,8 +699,8 @@ RS.RenderStepped:Connect(function()
     if S.Aimbot then
         local t=getBestTarget()
         if t then
-            local d=Vector3.new(t.Position.X-hrp.Position.X,0,t.Position.Z-hrp.Position.Z)
-            if d.Magnitude>0.01 and S._rivalsGyro then S._rivalsGyro.CFrame=CFrame.new(hrp.Position,hrp.Position+d) end
+            local dv=Vector3.new(t.Position.X-hrp.Position.X,0,t.Position.Z-hrp.Position.Z)
+            if dv.Magnitude>0.01 and S._rivalsGyro then S._rivalsGyro.CFrame=CFrame.new(hrp.Position,hrp.Position+dv) end
         end
     end
 end)
@@ -647,7 +708,7 @@ end)
 -- ==========================================
 --  NOCLIP
 -- ==========================================
-local _noclipConn = nil
+local _noclipConn=nil
 local function applyNoclip(char,enable)
     if not char then return end
     for _,p in ipairs(char:GetDescendants()) do
@@ -664,7 +725,9 @@ local function startNoclip()
             applyNoclip(c,false); return
         end
         local c=LP.Character; if not c then return end
-        for _,p in ipairs(c:GetDescendants()) do if p:IsA("BasePart") and p.CanCollide then pcall(function() p.CanCollide=false end) end end
+        for _,p in ipairs(c:GetDescendants()) do
+            if p:IsA("BasePart") and p.CanCollide then pcall(function() p.CanCollide=false end) end
+        end
     end)
 end
 local function stopNoclip()
@@ -684,7 +747,7 @@ local function calcBlinkDest(myHRP)
     for _,p in ipairs(Players:GetPlayers()) do
         if p~=LP and not S.BlinkExclude[p.Name] and p.Character and isAlive(p.Character) then
             local tHRP=getHRP(p.Character)
-            if tHRP then local d=(myHRP.Position-tHRP.Position).Magnitude; if d<closestDist then closestDist=d; closest=tHRP end end
+            if tHRP then local dv=(myHRP.Position-tHRP.Position).Magnitude; if dv<closestDist then closestDist=dv; closest=tHRP end end
         end
     end
     if not closest then return nil end
@@ -692,8 +755,7 @@ local function calcBlinkDest(myHRP)
     local myLook=Vector3.new(myHRP.CFrame.LookVector.X,0,myHRP.CFrame.LookVector.Z)
     local dir=flat.Magnitude>0.1 and flat.Unit or (myLook.Magnitude>0.01 and -myLook.Unit) or Vector3.new(0,0,-1)
     local perp=Vector3.new(-dir.Z,0,dir.X); local dist=S.BlinkDist
-    local candidates={closest.Position+dir*dist,closest.Position-dir*dist,closest.Position+perp*dist,closest.Position-perp*dist}
-    for _,c in ipairs(candidates) do
+    for _,c in ipairs({closest.Position+dir*dist,closest.Position-dir*dist,closest.Position+perp*dist,closest.Position-perp*dist}) do
         local safe,g=isSafePos(Vector3.new(c.X,c.Y+0.5,c.Z))
         if safe and g then return Vector3.new(c.X,g.Y+3,c.Z) end
     end
@@ -725,18 +787,51 @@ end
 -- ==========================================
 --  ANTI-AFK
 -- ==========================================
-local _antiAFKRunning=false
+local _afkRunning=false
 local function startAntiAFK()
-    if _antiAFKRunning then return end; _antiAFKRunning=true
+    if _afkRunning then return end; _afkRunning=true
     task.spawn(function()
-        while _antiAFKRunning and S.AntiAFK do task.wait(60)
-            if not (_antiAFKRunning and S.AntiAFK) then break end
+        while _afkRunning and S.AntiAFK do task.wait(60)
+            if not (_afkRunning and S.AntiAFK) then break end
             pcall(function() local h=LP.Character and getHum(LP.Character); if h then h.Jump=true; task.wait(0.1); h.Jump=false end end)
             pcall(function() local V=game:GetService("VirtualUser"); V:Button2Down(Vector2.new(0,0),CFrame.new()); task.wait(0.1); V:Button2Up(Vector2.new(0,0),CFrame.new()) end)
-        end; _antiAFKRunning=false
+        end; _afkRunning=false
     end)
 end
-local function stopAntiAFK() S.AntiAFK=false; _antiAFKRunning=false end
+local function stopAntiAFK() S.AntiAFK=false; _afkRunning=false end
+
+-- ==========================================
+--  INFINITE STAMINA — 3-method universal
+-- ==========================================
+local STAMINA_KW={"stamina","energy","sprint","mana","breath","run","endurance","vigor","power","fuel","fatigue","charge"}
+local _staminaObj={}
+local _staminaAttr={}
+local function _isStaminaName(n)
+    local nl=n:lower()
+    for _,kw in ipairs(STAMINA_KW) do if nl:find(kw,1,true) then return true end end
+    return false
+end
+local function refreshStaminaCache(char)
+    _staminaObj={}; _staminaAttr={}; if not char then return end
+    for _,v in ipairs(char:GetDescendants()) do
+        if (v:IsA("NumberValue") or v:IsA("IntValue") or v:IsA("NumberConstrainedValue")) and _isStaminaName(v.Name) then
+            local maxVal=100
+            if v:IsA("NumberConstrainedValue") then pcall(function() if v.MaxValue>0 then maxVal=v.MaxValue end end) end
+            local par=v.Parent
+            if par then
+                local mx=par:FindFirstChild("Max"..v.Name) or par:FindFirstChild(v.Name.."Max")
+                if mx and mx:IsA("NumberValue") and mx.Value>0 then maxVal=mx.Value end
+            end
+            _staminaObj[#_staminaObj+1]={obj=v,max=maxVal}
+        end
+    end
+    local ok,attrs=pcall(function() return char:GetAttributes() end)
+    if ok and attrs then
+        for attrName,attrVal in pairs(attrs) do
+            if type(attrVal)=="number" and _isStaminaName(attrName) then _staminaAttr[#_staminaAttr+1]=attrName end
+        end
+    end
+end
 
 -- ==========================================
 --  FLY
@@ -769,8 +864,12 @@ local function lockSpeed(hum)
         end)
     end)
 end
-LP.CharacterAdded:Connect(function(c) _cachedSpeedHum=nil; local h=c:WaitForChild("Humanoid",5); if h then lockSpeed(h) end end)
-if LP.Character then lockSpeed(getHum(LP.Character)) end
+LP.CharacterAdded:Connect(function(c)
+    _cachedSpeedHum=nil
+    local h=c:WaitForChild("Humanoid",5); if h then lockSpeed(h) end
+    task.wait(0.5); task.spawn(refreshStaminaCache,c)
+end)
+if LP.Character then lockSpeed(getHum(LP.Character)); task.spawn(refreshStaminaCache,LP.Character) end
 
 RS.Stepped:Connect(function()
     if not masterActive() then return end
@@ -786,7 +885,6 @@ end)
 RS.Heartbeat:Connect(function()
     if not masterActive() then return end
     local char=LP.Character; local hrp=char and getHRP(char); local hum=char and getHum(char)
-    -- FLY
     if S.Fly and Fly.bv and hrp then
         if hum then hum.PlatformStand=true end
         local cam=Cam.CFrame; local mv=Vector3.zero
@@ -804,16 +902,15 @@ RS.Heartbeat:Connect(function()
         Fly.bv.Velocity=mv.Magnitude>0 and mv.Unit*S.FlySpeed or Vector3.zero
         Fly.bg.CFrame=CFrame.new(hrp.Position)
     elseif not S.Fly and Fly.bv then stopFly() end
-    -- STAMINA
-    if char and _G.Vape_InfStamina then
-        for _,v in ipairs(char:GetDescendants()) do if v:IsA("NumberValue") and v.Name:lower():find("stamina") then v.Value=999999 end end
+    if char and S.InfStamina then
+        for _,entry in ipairs(_staminaObj) do
+            if entry.obj and entry.obj.Parent then entry.obj.Value=entry.max end
+        end
+        for _,attr in ipairs(_staminaAttr) do pcall(function() char:SetAttribute(attr,100) end) end
     end
     doBlink(); doAntiVoid()
 end)
 
--- ==========================================
---  INF JUMP
--- ==========================================
 UIS.JumpRequest:Connect(function()
     if not S.InfJump then return end
     local hum=LP.Character and getHum(LP.Character)
@@ -821,7 +918,7 @@ UIS.JumpRequest:Connect(function()
 end)
 
 -- ==========================================
---  WATERMARK
+--  WATERMARK + FPS
 -- ==========================================
 Library:Watermark({"VAPE internal","by LV_SDZ/MODZ",120959262762131})
 local _fpsCount=0
@@ -839,15 +936,19 @@ end)
 -- ==========================================
 local Window=Library:Window({Name="VAPE internal",SubName="by LV_SDZ/MODZ",Logo="120959262762131"})
 
--- VISUAL
 Window:Category("Visual")
 local ESPPage=Window:Page({Name="ESP",Icon="138827881557940"})
 local ESPLeft=ESPPage:Section({Name="Players",Side=1})
 local ESPRight=ESPPage:Section({Name="NPC & Items",Side=2})
 
-ESPLeft:Toggle({Flag="ESP_Player",Name="Player ESP",Default=S.ESP_Player,Callback=function(v) S.ESP_Player=v
-    for _,d in pairs(eESP) do if d.isPlayer then d.hl.Enabled=v end end
+ESPLeft:Toggle({Flag="ESP_Player",Name="Player ESP",Default=S.ESP_Player,Callback=function(v)
+    S.ESP_Player=v
+    for _,d in pairs(eESP) do if d.isPlayer then d.lbl.Visible=v end end
     if v then for _,p in ipairs(Players:GetPlayers()) do if p~=LP and p.Character then pcall(applyEntityESP,p.Character) end end end
+end})
+ESPLeft:Toggle({Flag="ESP_Highlight_P",Name="Player Highlight",Default=S.ESP_Highlight_P,Callback=function(v)
+    S.ESP_Highlight_P=v
+    for _,d in pairs(eESP) do if d.isPlayer then d.hl.Enabled=v end end
 end})
 ESPLeft:Toggle({Flag="ESP_HealthBar_P",Name="Health Bar",Default=S.ESP_HealthBar_P,Callback=function(v) S.ESP_HealthBar_P=v end})
 ESPLeft:Toggle({Flag="ESP_Traceline_P",Name="Tracer",Default=S.ESP_Traceline_P,Callback=function(v) S.ESP_Traceline_P=v end})
@@ -860,7 +961,9 @@ ESPLeft:Label("Player Color"):Colorpicker({Flag="C_PLAYER",Name="Color",Default=
     for _,d in pairs(eESP) do if d.isPlayer then d.hl.FillColor=v; d.hl.OutlineColor=v; d.lbl.TextColor3=v; d.col=v end end
 end})
 
-ESPRight:Toggle({Flag="ESP_NPC",Name="NPC ESP",Default=S.ESP_NPC,Callback=function(v) S.ESP_NPC=v
+ESPRight:Toggle({Flag="ESP_NPC",Name="NPC ESP",Default=S.ESP_NPC,Callback=function(v) S.ESP_NPC=v end})
+ESPRight:Toggle({Flag="ESP_Highlight_N",Name="NPC Highlight",Default=S.ESP_Highlight_N,Callback=function(v)
+    S.ESP_Highlight_N=v
     for _,d in pairs(eESP) do if not d.isPlayer then d.hl.Enabled=v end end
 end})
 ESPRight:Toggle({Flag="ESP_HealthBar_N",Name="NPC Health Bar",Default=S.ESP_HealthBar_N,Callback=function(v) S.ESP_HealthBar_N=v end})
@@ -879,7 +982,6 @@ ESPRight:Label("Item Color"):Colorpicker({Flag="C_ITEM",Name="Color",Default=S.C
     S.C_ITEM=v; for _,d in pairs(iESP) do d.hl.FillColor=v end
 end})
 
--- COMBAT
 Window:Category("Combat")
 local AimPage=Window:Page({Name="Aimbot",Icon="138827881557940"})
 local AimLeft=AimPage:Section({Name="Settings",Side=1})
@@ -905,7 +1007,6 @@ AimLeft:Dropdown({Flag="AimHotkey",Name="Aim Hotkey",Default={"RMB (Hold)"},
         elseif v=="Gamepad L2" then S.AimGamepad=true
         else local ok2,kc=pcall(function() return Enum.KeyCode[v] end); if ok2 and kc then S.AimKeyCode=kc end end
     end})
-
 AimRight:Toggle({Flag="ShowFOV",Name="Show FOV Circle",Default=S.ShowFOV,Callback=function(v) S.ShowFOV=v end})
 AimRight:Slider({Flag="FOV",Name="FOV Radius",Min=50,Max=800,Default=S.FOV,Callback=function(v) S.FOV=v end})
 AimRight:Toggle({Flag="RivalsMode",Name="Rivals Mode",Default=false,Callback=function(v)
@@ -919,7 +1020,6 @@ local wlDrop=AimRight:Dropdown({Flag="AimWL",Name="Whitelist",Default={},Items=g
 AimRight:Button({Name="Refresh Whitelist",Callback=function() pcall(function() wlDrop:Refresh(getWLNames()) end) end})
 AimRight:Button({Name="Clear Whitelist",Callback=function() S.AimWhitelist={}; Notify("Whitelist","Cleared",2) end})
 
--- MOVEMENT
 Window:Category("Movement")
 local MovPage=Window:Page({Name="Movement",Icon="138827881557940"})
 local MovLeft=MovPage:Section({Name="Player",Side=1})
@@ -932,7 +1032,8 @@ MovLeft:Toggle({Flag="Noclip",Name="Noclip",Default=false,Callback=function(v) S
 MovLeft:Toggle({Flag="Fly",Name="Fly",Default=false,Callback=function(v) S.Fly=v; if v then startFly() else stopFly() end end})
 MovLeft:Slider({Flag="FlySpeed",Name="Fly Speed",Min=10,Max=400,Default=S.FlySpeed,Suffix=" studs",Callback=function(v) S.FlySpeed=v end})
 MovLeft:Toggle({Flag="AntiVoid",Name="Anti-Void",Default=S.AntiVoid,Callback=function(v)
-    S.AntiVoid=v; if v then local hrp=LP.Character and getHRP(LP.Character); if hrp then S.AntiVoidTP=hrp.Position+Vector3.new(0,5,0) end end
+    S.AntiVoid=v
+    if v then local hrp=LP.Character and getHRP(LP.Character); if hrp then S.AntiVoidTP=hrp.Position+Vector3.new(0,5,0) end end
     Notify("Anti-Void",v and "ON" or "OFF",2)
 end})
 MovLeft:Slider({Flag="AntiVoidY",Name="Void Threshold Y",Min=-500,Max=-50,Default=S.AntiVoidY,Callback=function(v) S.AntiVoidY=v end})
@@ -951,8 +1052,10 @@ MovRight:Button({Name="Teleport",Callback=function()
     local target; for _,p in ipairs(Players:GetPlayers()) do if p.Name==selTP then target=p; break end end
     if not target then Notify("Error",selTP.." not found"); return end
     local tHRP=target.Character and getHRP(target.Character); local myHRP=LP.Character and getHRP(LP.Character)
-    if not tHRP then Notify("Error","No target body"); return end; if not myHRP then Notify("Error","No character"); return end
-    local dest=tHRP.CFrame*CFrame.new(0,4,0); if dest.Position.Y<-400 then Notify("TP","Void zone"); return end
+    if not tHRP then Notify("Error","No target body"); return end
+    if not myHRP then Notify("Error","No character"); return end
+    local dest=tHRP.CFrame*CFrame.new(0,4,0)
+    if dest.Position.Y<-400 then Notify("TP","Void zone"); return end
     pcall(function() myHRP.CFrame=dest end); Notify("TP","-> "..selTP)
 end})
 MovRight:Toggle({Flag="AutoBlink",Name="Auto Blink",Default=false,Callback=function(v)
@@ -966,16 +1069,30 @@ local exclDrop=MovRight:Dropdown({Flag="BlinkExcl",Name="Blink Exclusions",Defau
         for _,n in ipairs(list) do if n and n~="" and n~="(none)" then S.BlinkExclude[n]=true end end end})
 MovRight:Button({Name="Refresh Exclusions",Callback=function() pcall(function() exclDrop:Refresh(getExclNames()) end) end})
 
--- SETTINGS
 Window:Category("Settings")
 local MiscPage=Window:Page({Name="Misc",Icon="138827881557940"})
 local MiscLeft=MiscPage:Section({Name="Utilities",Side=1})
 local MiscRight=MiscPage:Section({Name="Config & Theme",Side=2})
 
 MiscLeft:Toggle({Flag="AntiAFK",Name="Anti-AFK",Default=S.AntiAFK,Callback=function(v) S.AntiAFK=v; if v then startAntiAFK() else stopAntiAFK() end; Notify("Anti-AFK",v and "ON" or "OFF",2) end})
-MiscLeft:Toggle({Flag="InfStamina",Name="Infinite Stamina",Default=false,Callback=function(v) _G.Vape_InfStamina=v end})
+MiscLeft:Toggle({Flag="InfStamina",Name="Infinite Stamina",Default=false,Callback=function(v)
+    S.InfStamina=v
+    if v and LP.Character then task.spawn(refreshStaminaCache,LP.Character) end
+    Notify("Inf Stamina",v and "ON" or "OFF",2)
+end})
+MiscLeft:Toggle({Flag="Fullbright",Name="Fullbright",Default=false,Callback=function(v)
+    S.Fullbright=v
+    if v then applyFullbright() else restoreLighting() end
+    Notify("Fullbright",v and "ON" or "OFF",2)
+end})
+MiscLeft:Toggle({Flag="InstantInteract",Name="Instant Interact",Default=false,Callback=function(v)
+    S.InstantInteract=v
+    if v then task.spawn(scanAndHackPrompts) end
+    Notify("Instant Interact",v and "ON" or "OFF",2)
+end})
 MiscLeft:Button({Name="Load Infinite Yield",Callback=function()
-    local fn=loadstring or load; if fn then pcall(function() fn(game:HttpGet("https://raw.githubusercontent.com/EdgeIY/infiniteyield/master/source"))() end) end
+    local fn=loadstring or load
+    if fn then pcall(function() fn(game:HttpGet("https://raw.githubusercontent.com/EdgeIY/infiniteyield/master/source"))() end) end
 end})
 MiscLeft:Keybind({Flag="MasterKeybind",Name="Master Toggle",Default=Enum.KeyCode.Insert,Callback=function()
     _masterEnabled=not _masterEnabled
@@ -988,10 +1105,8 @@ MiscRight:Button({Name="Reload Config",Callback=function() loadConfig(); Notify(
 MiscRight:Label("FOV Color"):Colorpicker({Flag="ThemeAccent",Name="Accent",Default=S.ThemeAccent,Callback=function(v)
     S.ThemeAccent=v; FOVC.Color=v; Library:ChangeTheme("Accent",v); Notify("Theme","Applied!",2)
 end})
-
 Library:CreateSettingsPage(Window,KeybindList)
 
--- MOBILE
 if isMobile then
     local sg=Instance.new("ScreenGui"); sg.Name="VapeMobileHUD"; sg.ResetOnSpawn=false; sg.IgnoreGuiInset=true; safeParent(sg)
     local function mkBtn(text,col)
@@ -1015,8 +1130,12 @@ end
 -- ==========================================
 task.spawn(scanItems)
 task.spawn(function()
+    local count=0
     for _,o in ipairs(workspace:GetDescendants()) do
-        if o:IsA("Model") and not Players:GetPlayerFromCharacter(o) then pcall(applyEntityESP,o) end
+        if o:IsA("Model") and not Players:GetPlayerFromCharacter(o) then
+            pcall(applyEntityESP,o); count=count+1
+            if count%50==0 then task.wait() end
+        end
     end
 end)
-Notify("VAPE internal","Ready | "..(LP.Name),5)
+Notify("VAPE internal","Ready | "..LP.Name,5)
